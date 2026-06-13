@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/device.dart';
 import '../models/message.dart';
 import '../models/file_transfer.dart';
@@ -47,10 +48,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('收到文件: ${t.fileName}'),
+              duration: const Duration(seconds: 5),
               action: SnackBarAction(
-                label: '查看',
+                label: '打开文件夹',
                 onPressed: () {
-                  // 可以滚动到对应位置
+                  if (t.localPath != null) {
+                    _openFileLocation(t.localPath!);
+                  }
                 },
               ),
             ),
@@ -58,6 +62,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         }
       }
     });
+  }
+
+  /// 打开文件所在文件夹
+  void _openFileLocation(String filePath) {
+    if (Platform.isWindows) {
+      Process.run('explorer', ['/select,', filePath]);
+    } else if (Platform.isLinux) {
+      Process.run('xdg-open', [File(filePath).parent.path]);
+    }
   }
 
   @override
@@ -137,7 +150,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (item is FileTransfer)
           return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
-              child: FileTransferTile(transfer: item));
+              child: FileTransferTile(
+                transfer: item,
+                onTap: item.localPath != null
+                    ? () => _openFileLocation(item.localPath!)
+                    : null,
+              ));
         return const SizedBox.shrink();
       },
     );

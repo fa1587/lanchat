@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/file_transfer.dart';
 
 /// 文件传输进度卡片
@@ -161,8 +163,47 @@ class FileTransferTile extends StatelessWidget {
                     style: TextStyle(
                         color: Colors.green, fontSize: 11)),
               ],
+              const Spacer(),
+              if (transfer.localPath != null) ...[
+                InkWell(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: transfer.localPath!));
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.copy, size: 14, color: Colors.grey[600]),
+                      const SizedBox(width: 2),
+                      Text('复制路径',
+                          style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                InkWell(
+                  onTap: onTap,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.folder_open, size: 14, color: Colors.blue[700]),
+                      const SizedBox(width: 2),
+                      Text('打开文件夹',
+                          style: TextStyle(fontSize: 11, color: Colors.blue[700])),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
+          if (transfer.localPath != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              transfer.localPath!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+            ),
+          ],
         ],
 
         if (transfer.status == TransferStatus.failed) ...[

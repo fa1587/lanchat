@@ -16,6 +16,7 @@ class HttpServerService {
   final String _deviceId;
   final String _deviceName;
   final String _platform;
+  String _downloadPath; // 用户设置的下载目录
   HttpServer? _server;
   int _port = 0;
 
@@ -34,9 +35,14 @@ class HttpServerService {
     required String deviceId,
     required String deviceName,
     required String platform,
+    String downloadPath = '',
   })  : _deviceId = deviceId,
         _deviceName = deviceName,
-        _platform = platform;
+        _platform = platform,
+        _downloadPath = downloadPath;
+
+  /// 更新下载目录（设置变更时调用）
+  set downloadPath(String path) => _downloadPath = path;
 
   /// 服务器端口
   int get port => _port;
@@ -117,7 +123,7 @@ class HttpServerService {
         Logger.d('防火墙规则已存在: $ruleName');
         return;
       }
-      // 添加入站规则
+      // 添加入站规则（只按端口放行，不绑定程序路径，避免空格/权限问题）
       final result = await Process.run('netsh', [
         'advfirewall', 'firewall', 'add', 'rule',
         'name=$ruleName',
@@ -125,13 +131,14 @@ class HttpServerService {
         'action=allow',
         'protocol=TCP',
         'localport=$port',
-        'program=${Platform.resolvedExecutable}',
         'enable=yes',
       ]);
       if (result.exitCode == 0) {
         Logger.i('防火墙规则已添加: $ruleName');
       } else {
-        Logger.w('防火墙规则添加失败: ${result.stderr}');
+        // 如果失败，尝试用管理员权限运行的提示
+        Logger.w('防火墙规则添加失败(exit=${result.exitCode}): ${result.stderr}');
+        Logger.w('请手动以管理员运行: netsh advfirewall firewall add rule name="$ruleName" dir=in action=allow protocol=TCP localport=$port enable=yes');
       }
     } catch (e) {
       // 静默失败，不影响主流程（可能没有管理员权限）
@@ -213,11 +220,20 @@ class HttpServerService {
         final fileSize = int.tryParse(fileSizeStr) ?? 0;
 
         // 读取原始文件数据
-        final bytes = await request.read().expand((x) => x).toList();
+        final streamBytes = await request.read().toList();
+        final bytes = <int>[];
+        for (final chunk in streamBytes) {
+          bytes.addAll(chunk);
+        }
 
         // 保存到接收目录
-        final dir = await getApplicationDocumentsDirectory();
-        final downloadDir = '${dir.path}/LanChat/Received';
+        String downloadDir;
+        if (_downloadPath.isNotEmpty) {
+          downloadDir = _downloadPath;
+        } else {
+          final dir = await getApplicationDocumentsDirectory();
+          downloadDir = '${dir.path}/LanChat/Received';
+        }
         await Directory(downloadDir).create(recursive: true);
 
         // 处理文件名冲突

@@ -16,13 +16,14 @@ class AppServicesNotifier extends StateNotifier<AppServices?> {
 
   Future<AppServices> initialize(
       String deviceId, String deviceName, String platform,
-      {bool autoAcceptFiles = false}) async {
+      {bool autoAcceptFiles = false, String downloadPath = ''}) async {
     if (state != null) return state!;
 
     final services = AppServices(
       deviceId: deviceId,
       deviceName: deviceName,
       platform: platform,
+      downloadPath: downloadPath,
     );
 
     await services.start(autoAcceptFiles: autoAcceptFiles);

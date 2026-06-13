@@ -30,7 +30,10 @@ class AppServices {
     required this.deviceId,
     required this.deviceName,
     required this.platform,
-  });
+    String downloadPath = '',
+  }) : _downloadPath = downloadPath;
+
+  String _downloadPath;
 
   /// 获取 DiscoveryService（启动后才有）
   DiscoveryService? get discoveryService => _discoveryService;
@@ -63,6 +66,7 @@ class AppServices {
         deviceId: deviceId,
         deviceName: deviceName,
         platform: platform,
+        downloadPath: _downloadPath,
       );
       try {
         httpPort = await httpServerService.start();
@@ -85,6 +89,7 @@ class AppServices {
 
     // 文件传输服务
     fileTransferService = FileTransferService();
+    fileTransferService.userDownloadPath = _downloadPath;
 
     // 初始化数据库
     try {
@@ -161,6 +166,14 @@ class AppServices {
       httpPort: httpPort,
     );
     await _discoveryService!.start();
+  }
+
+  /// 更新下载目录
+  void updateDownloadPath(String newPath) {
+    _downloadPath = newPath;
+    httpServerService.downloadPath = newPath;
+    fileTransferService.userDownloadPath = newPath;
+    Logger.i('下载目录已更新: $newPath');
   }
 
   /// 生成新设备 ID

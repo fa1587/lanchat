@@ -18,6 +18,7 @@ class FileTransferService {
       StreamController<List<FileTransfer>>.broadcast();
 
   String? _downloadDir;
+  String _userDownloadPath = ''; // 用户设置的下载目录
   final _client = http.Client();
 
   /// 文件接收完成回调（UI 层设置，用于弹通知）
@@ -28,10 +29,20 @@ class FileTransferService {
 
   List<FileTransfer> get activeTransfers => _transfers.values.toList();
 
+  /// 更新用户设置的下载目录
+  set userDownloadPath(String path) {
+    _userDownloadPath = path;
+    _downloadDir = null; // 清缓存，下次获取时重新计算
+  }
+
   Future<String> get downloadDir async {
     if (_downloadDir != null) return _downloadDir!;
-    final dir = await getApplicationDocumentsDirectory();
-    _downloadDir = '${dir.path}/LanChat/Received';
+    if (_userDownloadPath.isNotEmpty) {
+      _downloadDir = _userDownloadPath;
+    } else {
+      final dir = await getApplicationDocumentsDirectory();
+      _downloadDir = '${dir.path}/LanChat/Received';
+    }
     await Directory(_downloadDir!).create(recursive: true);
     return _downloadDir!;
   }
@@ -62,10 +73,12 @@ class FileTransferService {
 
     try {
       // 预检：ping 对方确认连通性
+      Logger.i('文件传输：准备 ping ${target.baseUrl}/api/v1/ping');
       final pingError = await HttpServerService.ping(target.baseUrl);
       if (pingError != null) {
+        Logger.w('文件传输：ping 失败 ${target.baseUrl} — $pingError');
         return _failTransfer(
-            transfer.id, '目标设备未响应 — $pingError');
+            transfer.id, '目标设备未响应 — $pingError\n\n请检查对方防火墙是否放行端口 ${target.port}');
       }
 
       // 自动接受模式：跳过 prepare，直接上传

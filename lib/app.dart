@@ -79,6 +79,7 @@ final _initServicesProvider = FutureProvider<AppServices?>((ref) async {
     settings.deviceName,
     platform,
     autoAcceptFiles: settings.autoAcceptFiles,
+    downloadPath: settings.downloadPath,
   );
 });
 

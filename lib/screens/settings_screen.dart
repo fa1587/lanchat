@@ -53,6 +53,9 @@ class SettingsScreen extends ConsumerWidget {
               final path = await FilePicker.platform.getDirectoryPath();
               if (path != null && context.mounted) {
                 ref.read(settingsProvider.notifier).setDownloadPath(path);
+                // 同步到运行中的服务
+                final services = ref.read(appServicesProvider);
+                services?.updateDownloadPath(path);
               }
             },
           ),
@@ -140,7 +143,7 @@ class SettingsScreen extends ConsumerWidget {
           const ListTile(
             leading: Icon(Icons.info_outline),
             title: Text('LanChat'),
-            subtitle: Text('Version 1.0.0'),
+            subtitle: Text('Version 1.0.6'),
           ),
 
           const SizedBox(height: 40),
