@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../models/device.dart';
 import '../models/file_transfer.dart';
 import '../utils/logger.dart';
+import 'http_server_service.dart';
 
 /// 文件传输服务
 class FileTransferService {
@@ -60,6 +61,13 @@ class FileTransferService {
     _emitTransfers();
 
     try {
+      // 预检：ping 对方确认连通性
+      final pingError = await HttpServerService.ping(target.baseUrl);
+      if (pingError != null) {
+        return _failTransfer(
+            transfer.id, '目标设备未响应 — $pingError');
+      }
+
       // 自动接受模式：跳过 prepare，直接上传
       final uploadUrl = '${target.baseUrl}/api/v1/file/upload';
       final fileBytes = await file.readAsBytes();
@@ -72,8 +80,10 @@ class FileTransferService {
       uploadRequest.headers['X-File-Size'] = fileSize.toString();
       uploadRequest.bodyBytes = fileBytes;
 
-      final response =
-          await _client.send(uploadRequest).then(http.Response.fromStream);
+      final response = await _client
+          .send(uploadRequest)
+          .then(http.Response.fromStream)
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final responseBody = response.body;

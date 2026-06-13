@@ -62,6 +62,10 @@ class HttpServerService {
         _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
         _port = port;
         Logger.i('HTTP 服务器启动在端口 $_port');
+
+        // 自动添加 Windows 防火墙规则（允许入站）
+        await _addFirewallRule(_port);
+
         return _port;
       } on SocketException catch (e) {
         if (e.osError?.errorCode == 10048) {
@@ -97,6 +101,62 @@ class HttpServerService {
     _server = null;
     _port = 0;
     Logger.i('HTTP 服务器已停止');
+  }
+
+  /// 自动添加 Windows 防火墙入站规则
+  Future<void> _addFirewallRule(int port) async {
+    if (!Platform.isWindows) return;
+    try {
+      final ruleName = 'LanChat HTTP Server (port $port)';
+      // 先检查规则是否已存在
+      final check = await Process.run('netsh', [
+        'advfirewall', 'firewall', 'show', 'rule',
+        'name=$ruleName',
+      ]);
+      if (check.stdout.toString().contains(ruleName)) {
+        Logger.d('防火墙规则已存在: $ruleName');
+        return;
+      }
+      // 添加入站规则
+      final result = await Process.run('netsh', [
+        'advfirewall', 'firewall', 'add', 'rule',
+        'name=$ruleName',
+        'dir=in',
+        'action=allow',
+        'protocol=TCP',
+        'localport=$port',
+        'program=${Platform.resolvedExecutable}',
+        'enable=yes',
+      ]);
+      if (result.exitCode == 0) {
+        Logger.i('防火墙规则已添加: $ruleName');
+      } else {
+        Logger.w('防火墙规则添加失败: ${result.stderr}');
+      }
+    } catch (e) {
+      // 静默失败，不影响主流程（可能没有管理员权限）
+      Logger.d('防火墙规则添加失败（可能需要管理员权限）: $e');
+    }
+  }
+
+  /// 测试目标设备连通性
+  static Future<String?> ping(String baseUrl) async {
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 3);
+      final request = await client.getUrl(Uri.parse('$baseUrl/api/v1/ping'));
+      final response = await request.close().timeout(
+        const Duration(seconds: 3),
+      );
+      if (response.statusCode == 200) return null; // 连通
+      return 'Ping 返回 ${response.statusCode}';
+    } on SocketException {
+      return '无法连接（防火墙可能拦截或端口未开放）';
+    } on TimeoutException {
+      return '连接超时（网络不通或端口不对）';
+    } catch (e) {
+      return '连接失败: $e';
+    }
   }
 
   /// 构建路由
