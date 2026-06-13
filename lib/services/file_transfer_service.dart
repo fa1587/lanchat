@@ -19,6 +19,9 @@ class FileTransferService {
   String? _downloadDir;
   final _client = http.Client();
 
+  /// 文件接收完成回调（UI 层设置，用于弹通知）
+  void Function(FileTransfer transfer)? onFileReceivedUI;
+
   Stream<List<FileTransfer>> get activeStream =>
       _transferController.stream;
 
@@ -57,36 +60,7 @@ class FileTransferService {
     _emitTransfers();
 
     try {
-      // Step 1: 通知接收方
-      final prepareUrl = '${target.baseUrl}/api/v1/file/prepare';
-      final prepareResponse = await _client
-          .post(
-            Uri.parse(prepareUrl),
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Device-Id': _uuid.v4().split('-').first,
-            },
-            body: jsonEncode({
-              'transferId': transfer.id,
-              'fileName': fileName,
-              'fileSize': fileSize,
-              'mimeType': mimeType,
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
-
-      if (prepareResponse.statusCode != 200) {
-        return _failTransfer(
-            transfer.id, '接收方返回 ${prepareResponse.statusCode}');
-      }
-
-      final result = jsonDecode(prepareResponse.body) as Map<String, dynamic>;
-      if (result['accepted'] != true) {
-        return _failTransfer(
-            transfer.id, result['reason'] ?? '接收方拒绝');
-      }
-
-      // Step 2: 上传文件（raw body + 元数据走 header）
+      // 自动接受模式：跳过 prepare，直接上传
       final uploadUrl = '${target.baseUrl}/api/v1/file/upload';
       final fileBytes = await file.readAsBytes();
       final uploadRequest = http.Request(
@@ -268,6 +242,7 @@ class FileTransferService {
     );
     _transfers[transfer.id] = transfer;
     _emitTransfers();
+    onFileReceivedUI?.call(transfer);
     Logger.i('文件已注册: $fileName ($fileSize bytes)');
   }
 

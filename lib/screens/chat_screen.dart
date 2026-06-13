@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +25,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _updater = ChatMessageUpdater();
+  StreamSubscription<List<FileTransfer>>? _transferSub;
+  final Set<String> _notifiedTransferIds = {};
 
   @override
   void initState() {
@@ -31,10 +34,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updater.start(ref, widget.device.id);
     });
+    // 监听文件接收完成，弹 Snackbar
+    _transferSub = ref
+        .read(fileTransferServiceProvider)
+        ?.activeStream
+        .listen((transfers) {
+      for (final t in transfers) {
+        if (t.direction == TransferDirection.receive &&
+            t.status == TransferStatus.completed &&
+            !_notifiedTransferIds.contains(t.id)) {
+          _notifiedTransferIds.add(t.id);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('收到文件: ${t.fileName}'),
+              action: SnackBarAction(
+                label: '查看',
+                onPressed: () {
+                  // 可以滚动到对应位置
+                },
+              ),
+            ),
+          );
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
+    _transferSub?.cancel();
     _updater.stop();
     _textController.dispose();
     _scrollController.dispose();
