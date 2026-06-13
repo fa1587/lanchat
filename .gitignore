@@ -1,0 +1,128 @@
+# ============================================
+# Flutter / Dart
+# ============================================
+.dart_tool/
+.packages
+build/
+*.iml
+*.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+.dart_tool/
+
+# ============================================
+# IDE & Editor
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================
+# Android
+# ============================================
+android/.gradle/
+android/app/build/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+android/app/release/
+*.apk
+*.aab
+
+# ============================================
+# iOS
+# ============================================
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/*.xcworkspace
+ios/Podfile.lock
+
+# ============================================
+# macOS
+# ============================================
+macos/Pods/
+macos/.symlinks/
+macos/Flutter/Flutter.framework
+macos/Flutter/Flutter.podspec
+
+# ============================================
+# Windows
+# ============================================
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake
+
+# ============================================
+# Linux
+# ============================================
+linux/flutter/ephemeral/
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+
+# ============================================
+# Web
+# ============================================
+web/
+
+# ============================================
+# 部署临时文件
+# ============================================
+lanchat_v*.exe
+lanchat_v*.tar
+lanchat_v*.zip
+*.tar
+*.zip
+
+# ============================================
+# 安全相关 — 绝不提交
+# ============================================
+# 私钥 & 证书
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_ed25519*
+id_rsa*
+*.pub
+
+# 配置含敏感信息
+*.env
+*.env.*
+!*.env.example
+**/config/secret*
+**/config/private*
+
+# 数据库 & 本地数据
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+
+# 日志
+*.log
+logs/
+
+# ============================================
+# 测试 & 开发工具
+# ============================================
+serve.dart
+coverage/
+test/fixtures/
+
+# ============================================
+# 杂项
+# ============================================
+*.orig
+*.tmp
+*.bak
