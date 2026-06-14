@@ -30,8 +30,16 @@ class FileTransferService {
   String _userDownloadPath = ''; // 用户设置的下载目录
   final _client = http.Client();
 
+  /// 本机设备信息（发送文件时写入 HTTP header）
+  final String? _deviceId;
+  final String? _deviceName;
+
   /// 文件接收完成回调（UI 层设置，用于弹通知）
   void Function(FileTransfer transfer)? onFileReceivedUI;
+
+  FileTransferService({String? deviceId, String? deviceName})
+      : _deviceId = deviceId,
+        _deviceName = deviceName;
 
   Stream<List<FileTransfer>> get activeStream =>
       _transferController.stream;
@@ -110,6 +118,13 @@ class FileTransferService {
       httpRequest.headers.set('X-File-Size', fileSize.toString());
       httpRequest.headers
           .set('Content-Type', 'application/octet-stream');
+      // 发送端设备信息，接收端用于展示"来自 xxx"
+      if (_deviceId != null) {
+        httpRequest.headers.set('X-Device-Id', _deviceId!);
+      }
+      if (_deviceName != null) {
+        httpRequest.headers.set('X-Device-Name', Uri.encodeComponent(_deviceName!));
+      }
       httpRequest.contentLength = fileSize;
 
       // 流式读文件 + 增量 SHA-256
@@ -200,7 +215,7 @@ class FileTransferService {
     }
   }
 
-  /// 处理接收的文件数据（流式写入）
+  /// 处理接收的文件数据（流式写入，临时文件保护）
   Future<FileTransfer> handleReceiveFile({
     required String transferId,
     required String fileName,
@@ -212,8 +227,10 @@ class FileTransferService {
   }) async {
     final dir = await downloadDir;
     final safeFileName = _getSafeFileName(dir, fileName);
-    final filePath = '$dir/$safeFileName';
+    final tempPath = '$dir/$safeFileName.lanchat_tmp';
+    final finalPath = '$dir/$safeFileName';
 
+    // 创建传输记录（此时不设置 localPath，防止打开未完成文件）
     final transfer = FileTransfer(
       id: transferId,
       fileName: safeFileName,
@@ -222,7 +239,6 @@ class FileTransferService {
       remoteDeviceId: remoteDeviceId,
       remoteDeviceName: remoteDeviceName,
       direction: TransferDirection.receive,
-      localPath: filePath,
       createdAt: DateTime.now(),
     );
 
@@ -230,8 +246,9 @@ class FileTransferService {
     _emitTransfers();
 
     try {
-      final file = File(filePath);
-      final sink = file.openWrite();
+      // 写入临时文件（.lanchat_tmp），传输完成后 rename 到最终路径
+      final tempFile = File(tempPath);
+      final sink = tempFile.openWrite();
       var bytesReceived = 0;
       final startTime = DateTime.now();
       final digestHolder = _DigestHolder();
@@ -265,20 +282,31 @@ class FileTransferService {
       sha256Sink.close();
       final hash = digestHolder.digest?.toString() ?? '';
 
+      // 传输完成：临时文件 → 最终路径
+      await tempFile.rename(finalPath);
+      Logger.i('文件接收成功: $finalPath (SHA256: $hash)');
+
       final completed = transfer.copyWith(
         status: TransferStatus.completed,
         progress: 1.0,
         bytesTransferred: fileSize,
         sha256: hash,
+        localPath: finalPath,
         completedAt: DateTime.now(),
       );
 
       _transfers[transfer.id] = completed;
       _emitTransfers();
-      Logger.i('文件接收成功: $filePath (SHA256: $hash)');
+
+      // 通知 UI 层弹接收完成提示
+      onFileReceivedUI?.call(completed);
 
       return completed;
     } catch (e) {
+      // 传输失败：清理临时文件
+      try {
+        await File(tempPath).delete();
+      } catch (_) {}
       Logger.e('接收文件失败', e);
       return _failTransfer(transfer.id, e.toString());
     }

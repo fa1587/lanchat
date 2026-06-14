@@ -5,6 +5,7 @@ import 'network_service.dart';
 import 'discovery_service.dart';
 import 'http_server_service.dart';
 import 'file_transfer_service.dart';
+import '../models/file_transfer.dart';
 import 'message_service.dart';
 import 'database_service.dart';
 import '../utils/logger.dart';
@@ -88,7 +89,10 @@ class AppServices {
     );
 
     // 文件传输服务
-    fileTransferService = FileTransferService();
+    fileTransferService = FileTransferService(
+      deviceId: deviceId,
+      deviceName: deviceName,
+    );
     fileTransferService.userDownloadPath = _downloadPath;
 
     // 初始化数据库
@@ -108,12 +112,29 @@ class AppServices {
       final transferId = prepareInfo['transferId'] as String? ?? '';
       return {'transferId': transferId, 'accepted': autoAcceptFiles};
     };
-    httpServerService.onFileReceived = (transferId, filePath, fileSize) {
-      fileTransferService.registerReceivedFile(
+    httpServerService.onFileUploadStream = (
+        {required String transferId,
+        required String fileName,
+        required int fileSize,
+        required String mimeType,
+        required Stream<List<int>> dataStream,
+        String? remoteDeviceId,
+        String? remoteDeviceName}) async {
+      final result = await fileTransferService.handleReceiveFile(
         transferId: transferId,
-        filePath: filePath,
+        fileName: fileName,
         fileSize: fileSize,
+        mimeType: mimeType,
+        dataStream: dataStream,
+        remoteDeviceId: remoteDeviceId,
+        remoteDeviceName: remoteDeviceName,
       );
+      return {
+        'ok': result.status == TransferStatus.completed,
+        'fileName': result.fileName,
+        'fileSize': result.bytesTransferred,
+        'sha256': result.sha256 ?? '',
+      };
     };
 
     // 设备发现（仅在非 Web 环境启动）

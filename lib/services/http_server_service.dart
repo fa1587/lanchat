@@ -37,8 +37,16 @@ class HttpServerService {
   Future<Map<String, dynamic>> Function(Map<String, dynamic> prepareInfo)?
       onFilePrepare;
 
-  // 回调：当收到文件上传完成时
-  void Function(String transferId, String filePath, int fileSize)? onFileReceived;
+  // 回调：当收到文件上传流时（实时进度跟踪 + 临时文件保护）
+  Future<Map<String, dynamic>> Function({
+    required String transferId,
+    required String fileName,
+    required int fileSize,
+    required String mimeType,
+    required Stream<List<int>> dataStream,
+    String? remoteDeviceId,
+    String? remoteDeviceName,
+  })? onFileUploadStream;
 
   HttpServerService({
     required String deviceId,
@@ -221,15 +229,34 @@ class HttpServerService {
       }
     });
 
-    // 文件上传（raw body + 元数据走 header，流式写盘）
+    // 文件上传（raw body + 元数据走 header，流式进度跟踪）
     router.post('/api/v1/file/upload', (request) async {
       try {
         final transferId = request.headers['X-Transfer-Id'] ?? '';
         final fileName = Uri.decodeComponent(request.headers['X-File-Name'] ?? 'unknown');
         final fileSizeStr = request.headers['X-File-Size'] ?? '0';
         final fileSize = int.tryParse(fileSizeStr) ?? 0;
+        final remoteDeviceId = request.headers['X-Device-Id'];
+        final remoteDeviceName = request.headers['X-Device-Name'] != null
+            ? Uri.decodeComponent(request.headers['X-Device-Name']!)
+            : null;
 
-        // 保存到接收目录
+        // 通过回调交给 FileTransferService 处理（实时进度 + 临时文件保护）
+        if (onFileUploadStream != null) {
+          final result = await onFileUploadStream!(
+            transferId: transferId,
+            fileName: fileName,
+            fileSize: fileSize,
+            mimeType: _guessMimeType(fileName),
+            dataStream: request.read(),
+            remoteDeviceId: remoteDeviceId,
+            remoteDeviceName: remoteDeviceName,
+          );
+          return Response.ok(jsonEncode(result),
+              headers: {'Content-Type': 'application/json'});
+        }
+
+        // 回调未设置时，降级：直接写文件（无进度跟踪）
         String downloadDir;
         if (_downloadPath.isNotEmpty) {
           downloadDir = _downloadPath;
@@ -239,7 +266,6 @@ class HttpServerService {
         }
         await Directory(downloadDir).create(recursive: true);
 
-        // 处理文件名冲突
         var safeName = fileName;
         var counter = 1;
         while (File('$downloadDir/$safeName').existsSync()) {
@@ -251,34 +277,19 @@ class HttpServerService {
         }
 
         final filePath = '$downloadDir/$safeName';
-
-        // 流式写盘 + 增量 SHA-256（不缓存到内存）
         final file = File(filePath);
         final sink = file.openWrite();
-        final digestHolder = _DigestHolder();
-        final sha256Sink = sha256.startChunkedConversion(digestHolder);
         int bytesReceived = 0;
-
         await for (final chunk in request.read()) {
           sink.add(chunk);
-          sha256Sink.add(chunk);
           bytesReceived = bytesReceived + (chunk.length as int);
         }
-
         await sink.close();
-        sha256Sink.close();
-        final hash = digestHolder.digest?.toString() ?? '';
-
-        Logger.i('文件接收完成: $filePath ($bytesReceived bytes, SHA256: $hash)');
-
-        // 通知回调
-        onFileReceived?.call(transferId, filePath, bytesReceived);
 
         return Response.ok(jsonEncode({
           'ok': true,
           'fileName': safeName,
           'fileSize': bytesReceived,
-          'sha256': hash,
         }), headers: {'Content-Type': 'application/json'});
       } catch (e, st) {
         Logger.e('文件上传处理失败', e, st);
@@ -312,5 +323,18 @@ class HttpServerService {
     });
 
     return router;
+  }
+
+  String _guessMimeType(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    const mimeMap = {
+      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+      'gif': 'image/gif', 'webp': 'image/webp', 'pdf': 'application/pdf',
+      'mp4': 'video/mp4', 'mkv': 'video/x-matroska', 'avi': 'video/x-msvideo',
+      'mov': 'video/quicktime', 'mp3': 'audio/mpeg',
+      'zip': 'application/zip', 'rar': 'application/vnd.rar',
+      'txt': 'text/plain', 'apk': 'application/vnd.android.package-archive',
+    };
+    return mimeMap[ext] ?? 'application/octet-stream';
   }
 }
