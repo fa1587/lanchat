@@ -97,15 +97,14 @@ class FileTransferService {
       // 关键修复：防止大文件传输中途被路由器NAT超时断开
       // 1. 连接复用关掉，避免旧连接状态问题
       httpClient.autoUncompress = false;
-      // 2. 动态超时：按 5MB/s 估算（保守值）+ 120秒缓冲，上限2小时
+      // 2. 动态超时：按 5MB/s 估算（保守值）+ 300秒缓冲，上限4小时
       final timeoutSeconds =
-          (fileSize ~/ (5 * 1024 * 1024) + 120).clamp(60, 7200);
+          (fileSize ~/ (5 * 1024 * 1024) + 300).clamp(120, 14400);
       httpClient.connectionTimeout = Duration(seconds: 30); // 只管建连
       // 3. idleTimeout 设长一点，防止传输过程中被回收
-      httpClient.idleTimeout = Duration(seconds: timeoutSeconds + 60);
+      httpClient.idleTimeout = Duration(seconds: timeoutSeconds);
 
       final httpRequest = await httpClient.postUrl(uri);
-      // followRedirects 在 postUrl 后设置无效，跳过
       httpRequest.headers.set('X-Transfer-Id', transfer.id);
       httpRequest.headers.set('X-File-Name', Uri.encodeComponent(fileName));
       httpRequest.headers.set('X-File-Size', fileSize.toString());
@@ -114,13 +113,12 @@ class FileTransferService {
       httpRequest.contentLength = fileSize;
 
       // 流式读文件 + 增量 SHA-256
-      const chunkSize = 1024 * 1024; // 1MB per chunk
+      // 用 256KB 小 chunk，数据自然流出，不需要显式 flush
+      const chunkSize = 256 * 1024;
       final digestHolder = _DigestHolder();
       final sha256Sink = sha256.startChunkedConversion(digestHolder);
       var bytesTransferred = 0;
-      var bytesSinceLastFlush = 0;
       final startTime = DateTime.now();
-      var lastFlushTime = DateTime.now();
 
       final rawFile = await file.open();
       try {
@@ -134,32 +132,20 @@ class FileTransferService {
           sha256Sink.add(chunk);
           httpRequest.add(chunk);
           bytesTransferred += chunk.length;
-          bytesSinceLastFlush += chunk.length;
 
-          // 定期 flush（每5秒或每50MB），确保数据发出去维持连接活跃
+          // 更新进度（每200ms刷新一次UI，避免频繁emit）
           final now = DateTime.now();
-          if (now.difference(lastFlushTime).inSeconds >= 5 ||
-              bytesSinceLastFlush > 50 * 1024 * 1024) {
-            try {
-              httpRequest.flush();
-              bytesSinceLastFlush = 0;
-            } catch (_) {}
-            lastFlushTime = now;
-          }
-
-          // 更新进度
-          final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
-          final progress = bytesTransferred / fileSize;
-          final speedBps = elapsed > 0 ? (bytesTransferred / elapsed) : 0.0;
-
-          _transfers[transfer.id] = transfer.copyWith(
-            status: TransferStatus.transferring,
-            progress: progress,
-            bytesTransferred: bytesTransferred,
-            speedBps: speedBps,
-          );
-
           if (now.difference(_lastEmitTime ?? now).inMilliseconds > 200) {
+            final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
+            final progress = bytesTransferred / fileSize;
+            final speedBps = elapsed > 0 ? (bytesTransferred / elapsed) : 0.0;
+
+            _transfers[transfer.id] = transfer.copyWith(
+              status: TransferStatus.transferring,
+              progress: progress,
+              bytesTransferred: bytesTransferred,
+              speedBps: speedBps,
+            );
             _emitTransfers();
             _lastEmitTime = now;
           }
