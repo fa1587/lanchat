@@ -143,7 +143,7 @@ class SettingsScreen extends ConsumerWidget {
           const ListTile(
             leading: Icon(Icons.info_outline),
             title: Text('LanChat'),
-            subtitle: Text('Version 1.0.6'),
+            subtitle: Text('Version 1.0.8'),
           ),
 
           const SizedBox(height: 40),

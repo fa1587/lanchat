@@ -94,11 +94,18 @@ class FileTransferService {
       final uploadUrl = '${target.baseUrl}/api/v1/file/upload';
       final uri = Uri.parse(uploadUrl);
       final httpClient = HttpClient();
-      // 动态超时：至少 30 秒，大文件按 1MB/s 估算 + 60秒缓冲
-      final timeoutSeconds = (fileSize ~/ (1024 * 1024) + 60).clamp(30, 7200);
-      httpClient.connectionTimeout = Duration(seconds: timeoutSeconds);
+      // 关键修复：防止大文件传输中途被路由器NAT超时断开
+      // 1. 连接复用关掉，避免旧连接状态问题
+      httpClient.autoUncompress = false;
+      // 2. 动态超时：按 5MB/s 估算（保守值）+ 120秒缓冲，上限2小时
+      final timeoutSeconds =
+          (fileSize ~/ (5 * 1024 * 1024) + 120).clamp(60, 7200);
+      httpClient.connectionTimeout = Duration(seconds: 30); // 只管建连
+      // 3. idleTimeout 设长一点，防止传输过程中被回收
+      httpClient.idleTimeout = Duration(seconds: timeoutSeconds + 60);
 
       final httpRequest = await httpClient.postUrl(uri);
+      // followRedirects 在 postUrl 后设置无效，跳过
       httpRequest.headers.set('X-Transfer-Id', transfer.id);
       httpRequest.headers.set('X-File-Name', fileName);
       httpRequest.headers.set('X-File-Size', fileSize.toString());
@@ -112,6 +119,7 @@ class FileTransferService {
       final sha256Sink = sha256.startChunkedConversion(digestHolder);
       var bytesTransferred = 0;
       final startTime = DateTime.now();
+      var lastFlushTime = DateTime.now();
 
       final rawFile = await file.open();
       try {
@@ -126,8 +134,17 @@ class FileTransferService {
           httpRequest.add(chunk);
           bytesTransferred += chunk.length;
 
-          // 更新进度
+          // 定期 flush（每5秒或每50MB），确保数据发出去维持连接活跃
           final now = DateTime.now();
+          if (now.difference(lastFlushTime).inSeconds >= 5 ||
+              bytesTransferred - (bytesTransferred - chunk.length) > 50 * 1024 * 1024) {
+            try {
+              httpRequest.flush();
+            } catch (_) {}
+            lastFlushTime = now;
+          }
+
+          // 更新进度
           final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
           final progress = bytesTransferred / fileSize;
           final speedBps = elapsed > 0 ? (bytesTransferred / elapsed) : 0.0;
@@ -151,9 +168,20 @@ class FileTransferService {
       sha256Sink.close();
       final sha256Hash = digestHolder.digest?.toString() ?? '';
 
-      // 等待服务器响应
-      final httpResponse = await httpRequest.close()
-          .timeout(Duration(seconds: timeoutSeconds));
+      // 等待服务器响应（给服务器充足时间写盘+计算SHA256）
+      final responseTimeout = Duration(seconds: (timeoutSeconds / 2).ceil().clamp(60, 3600));
+      HttpClientResponse? httpResponse;
+      try {
+        httpResponse = await httpRequest.close().timeout(responseTimeout);
+      } catch (e) {
+        httpClient.close();
+        if (e is TimeoutException) {
+          return _failTransfer(transfer.id,
+              '传输超时：文件数据已发完，但等待对方确认超时\n'
+              '可能原因：对方写盘慢 / 磁盘空间不足 / 杀毒软件拦截');
+        }
+        rethrow;
+      }
       final responseBody = await httpResponse.transform(utf8.decoder).join();
       httpClient.close();
 
@@ -335,6 +363,7 @@ class FileTransferService {
       createdAt: DateTime.now(),
     )).copyWith(
       status: TransferStatus.failed,
+      errorReason: reason,
       completedAt: DateTime.now(),
     );
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/device.dart';
 import '../models/message.dart';
@@ -28,6 +29,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _updater = ChatMessageUpdater();
   StreamSubscription<List<FileTransfer>>? _transferSub;
   final Set<String> _notifiedTransferIds = {};
+  bool _isDraggingOver = false; // 拖拽悬停状态
 
   @override
   void initState() {
@@ -106,11 +108,85 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.pop(context)),
       ),
-      body: Column(children: [
-        Expanded(child: _buildMessageList(items, myDeviceId)),
-        const Divider(height: 1),
-        _buildInputBar(context),
-      ]),
+      body: DropTarget(
+        onDragEntered: (details) {
+          setState(() => _isDraggingOver = true);
+        },
+        onDragExited: (details) {
+          setState(() => _isDraggingOver = false);
+        },
+        onDragDone: (details) async {
+          setState(() => _isDraggingOver = false);
+          // 处理拖拽进来的文件
+          final files = details.files
+              .where((f) => f.path != null)
+              .map((f) => File(f.path!))
+              .toList();
+          if (files.isEmpty) return;
+          for (final file in files) {
+            await _sendFile(file);
+          }
+        },
+        child: Stack(children: [
+          Column(children: [
+            Expanded(child: _buildMessageList(items, myDeviceId)),
+            const Divider(height: 1),
+            _buildInputBar(context),
+          ]),
+          // 拖拽悬停遮罩
+          if (_isDraggingOver)
+            Positioned.fill(
+              child: Container(
+                color: Theme.of(context).primaryColor.withValues(alpha: 0.15),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 32, vertical: 16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).primaryColor,
+                        width: 3,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4)),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.file_upload_outlined,
+                            size: 48,
+                            color: Theme.of(context).primaryColor),
+                        const SizedBox(height: 8),
+                        Text('释放以发送文件',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color:
+                                  Theme.of(context).colorScheme.onSurface,
+                            )),
+                        const SizedBox(height: 4),
+                        Text('支持拖拽多个文件',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.6),
+                            )),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ]),
+      ),
     );
   }
 
@@ -232,12 +308,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
     if (file.path == null) return;
+    await _sendFile(File(file.path!));
+  }
 
+  /// 发送文件（供按钮选择和拖拽共用）
+  Future<void> _sendFile(File file) async {
     final ftService = ref.read(fileTransferServiceProvider);
     if (ftService == null) return;
 
     try {
-      final transfer = await ftService.sendFile(widget.device, File(file.path!));
+      final transfer = await ftService.sendFile(widget.device, file);
       // 发送文件消息通知
       final msgService = ref.read(messageServiceProvider);
       if (msgService != null) {
@@ -256,7 +336,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       if (transfer.status == TransferStatus.failed) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('文件发送失败：目标设备未响应')));
+            SnackBar(content: Text('文件发送失败：${transfer.errorReason ?? "未知错误"}')));
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

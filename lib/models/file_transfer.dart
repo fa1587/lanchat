@@ -28,6 +28,7 @@ class FileTransfer {
   final double speedBps; // 实时速度 bytes/s
   final String? localPath; // 本地存储路径
   final String? sha256;
+  final String? errorReason; // 失败原因
   final DateTime createdAt;
   final DateTime? completedAt;
 
@@ -45,6 +46,7 @@ class FileTransfer {
     this.speedBps = 0,
     this.localPath,
     this.sha256,
+    this.errorReason,
     required this.createdAt,
     this.completedAt,
   });
@@ -86,6 +88,7 @@ class FileTransfer {
     double? speedBps,
     String? localPath,
     String? sha256,
+    String? errorReason,
     DateTime? completedAt,
   }) =>
       FileTransfer(
@@ -102,6 +105,7 @@ class FileTransfer {
         speedBps: speedBps ?? this.speedBps,
         localPath: localPath ?? this.localPath,
         sha256: sha256 ?? this.sha256,
+        errorReason: errorReason ?? this.errorReason,
         createdAt: createdAt,
         completedAt: completedAt ?? this.completedAt,
       );
@@ -121,6 +125,7 @@ class FileTransfer {
         speedBps: (json['speedBps'] as num).toDouble(),
         localPath: json['localPath'] as String?,
         sha256: json['sha256'] as String?,
+        errorReason: json['errorReason'] as String?,
         createdAt:
             DateTime.fromMillisecondsSinceEpoch(json['createdAt'] as int),
         completedAt: json['completedAt'] != null
@@ -143,6 +148,7 @@ class FileTransfer {
         'speedBps': speedBps,
         'localPath': localPath,
         'sha256': sha256,
+        'errorReason': errorReason,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'completedAt': completedAt?.millisecondsSinceEpoch,
       };
