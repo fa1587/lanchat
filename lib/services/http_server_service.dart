@@ -10,6 +10,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
 import '../utils/logger.dart';
 
+/// 辅助类：捕获 chunked SHA-256 的最终 Digest
+class _DigestHolder implements Sink<Digest> {
+  Digest? digest;
+  @override
+  void add(Digest data) => digest = data;
+  @override
+  void close() {}
+}
+
 /// 本机 HTTP 服务器
 /// 提供设备信息、文件传输、WebSocket 消息等 API
 class HttpServerService {
@@ -211,20 +220,13 @@ class HttpServerService {
       }
     });
 
-    // 文件上传（raw body + 元数据走 header）
+    // 文件上传（raw body + 元数据走 header，流式写盘）
     router.post('/api/v1/file/upload', (request) async {
       try {
         final transferId = request.headers['X-Transfer-Id'] ?? '';
         final fileName = request.headers['X-File-Name'] ?? 'unknown';
         final fileSizeStr = request.headers['X-File-Size'] ?? '0';
         final fileSize = int.tryParse(fileSizeStr) ?? 0;
-
-        // 读取原始文件数据
-        final streamBytes = await request.read().toList();
-        final bytes = <int>[];
-        for (final chunk in streamBytes) {
-          bytes.addAll(chunk);
-        }
 
         // 保存到接收目录
         String downloadDir;
@@ -248,20 +250,33 @@ class HttpServerService {
         }
 
         final filePath = '$downloadDir/$safeName';
-        await File(filePath).writeAsBytes(bytes);
 
-        // 计算 SHA-256
-        final hash = sha256.convert(bytes).toString();
+        // 流式写盘 + 增量 SHA-256（不缓存到内存）
+        final file = File(filePath);
+        final sink = file.openWrite();
+        final digestHolder = _DigestHolder();
+        final sha256Sink = sha256.startChunkedConversion(digestHolder);
+        int bytesReceived = 0;
 
-        Logger.i('文件接收完成: $filePath ($fileSize bytes, SHA256: $hash)');
+        await for (final chunk in request.read()) {
+          sink.add(chunk);
+          sha256Sink.add(chunk);
+          bytesReceived = bytesReceived + (chunk.length as int);
+        }
+
+        await sink.close();
+        sha256Sink.close();
+        final hash = digestHolder.digest?.toString() ?? '';
+
+        Logger.i('文件接收完成: $filePath ($bytesReceived bytes, SHA256: $hash)');
 
         // 通知回调
-        onFileReceived?.call(transferId, filePath, bytes.length);
+        onFileReceived?.call(transferId, filePath, bytesReceived);
 
         return Response.ok(jsonEncode({
           'ok': true,
           'fileName': safeName,
-          'fileSize': bytes.length,
+          'fileSize': bytesReceived,
           'sha256': hash,
         }), headers: {'Content-Type': 'application/json'});
       } catch (e, st) {

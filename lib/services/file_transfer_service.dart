@@ -10,6 +10,15 @@ import '../models/file_transfer.dart';
 import '../utils/logger.dart';
 import 'http_server_service.dart';
 
+/// 辅助类：捕获 chunked SHA-256 的最终 Digest
+class _DigestHolder implements Sink<Digest> {
+  Digest? digest;
+  @override
+  void add(Digest data) => digest = data;
+  @override
+  void close() {}
+}
+
 /// 文件传输服务
 class FileTransferService {
   final _uuid = const Uuid();
@@ -47,7 +56,7 @@ class FileTransferService {
     return _downloadDir!;
   }
 
-  /// 发送文件给目标设备
+  /// 发送文件给目标设备（流式上传，支持大文件）
   Future<FileTransfer> sendFile(
     Device target,
     File file, {
@@ -81,29 +90,75 @@ class FileTransferService {
             transfer.id, '目标设备未响应 — $pingError\n\n请检查对方防火墙是否放行端口 ${target.port}');
       }
 
-      // 自动接受模式：跳过 prepare，直接上传
+      // 用 dart:io HttpClient 流式上传（不把整个文件读进内存）
       final uploadUrl = '${target.baseUrl}/api/v1/file/upload';
-      final fileBytes = await file.readAsBytes();
-      final uploadRequest = http.Request(
-        'POST',
-        Uri.parse(uploadUrl),
-      );
-      uploadRequest.headers['X-Transfer-Id'] = transfer.id;
-      uploadRequest.headers['X-File-Name'] = fileName;
-      uploadRequest.headers['X-File-Size'] = fileSize.toString();
-      uploadRequest.bodyBytes = fileBytes;
+      final uri = Uri.parse(uploadUrl);
+      final httpClient = HttpClient();
+      // 动态超时：至少 30 秒，大文件按 1MB/s 估算 + 60秒缓冲
+      final timeoutSeconds = (fileSize ~/ (1024 * 1024) + 60).clamp(30, 7200);
+      httpClient.connectionTimeout = Duration(seconds: timeoutSeconds);
 
-      final response = await _client
-          .send(uploadRequest)
-          .then(http.Response.fromStream)
-          .timeout(const Duration(seconds: 30));
+      final httpRequest = await httpClient.postUrl(uri);
+      httpRequest.headers.set('X-Transfer-Id', transfer.id);
+      httpRequest.headers.set('X-File-Name', fileName);
+      httpRequest.headers.set('X-File-Size', fileSize.toString());
+      httpRequest.headers
+          .set('Content-Type', 'application/octet-stream');
+      httpRequest.contentLength = fileSize;
 
-      if (response.statusCode == 200) {
-        final responseBody = response.body;
+      // 流式读文件 + 增量 SHA-256
+      const chunkSize = 1024 * 1024; // 1MB per chunk
+      final digestHolder = _DigestHolder();
+      final sha256Sink = sha256.startChunkedConversion(digestHolder);
+      var bytesTransferred = 0;
+      final startTime = DateTime.now();
+
+      final rawFile = await file.open();
+      try {
+        while (bytesTransferred < fileSize) {
+          final remaining = fileSize - bytesTransferred;
+          final readLen = remaining < chunkSize ? remaining : chunkSize;
+          final chunk = await rawFile.read(readLen);
+
+          if (chunk.isEmpty) break; // 文件意外结束
+
+          sha256Sink.add(chunk);
+          httpRequest.add(chunk);
+          bytesTransferred += chunk.length;
+
+          // 更新进度
+          final now = DateTime.now();
+          final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
+          final progress = bytesTransferred / fileSize;
+          final speedBps = elapsed > 0 ? (bytesTransferred / elapsed) : 0.0;
+
+          _transfers[transfer.id] = transfer.copyWith(
+            status: TransferStatus.transferring,
+            progress: progress,
+            bytesTransferred: bytesTransferred,
+            speedBps: speedBps,
+          );
+
+          if (now.difference(_lastEmitTime ?? now).inMilliseconds > 200) {
+            _emitTransfers();
+            _lastEmitTime = now;
+          }
+        }
+      } finally {
+        await rawFile.close();
+      }
+
+      sha256Sink.close();
+      final sha256Hash = digestHolder.digest?.toString() ?? '';
+
+      // 等待服务器响应
+      final httpResponse = await httpRequest.close()
+          .timeout(Duration(seconds: timeoutSeconds));
+      final responseBody = await httpResponse.transform(utf8.decoder).join();
+      httpClient.close();
+
+      if (httpResponse.statusCode == 200) {
         Logger.i('上传完成: $responseBody');
-
-        // 使用已读取的 fileBytes 计算 SHA-256
-        final sha256Hash = sha256.convert(fileBytes).toString();
 
         final completed = transfer.copyWith(
           status: TransferStatus.completed,
@@ -120,7 +175,7 @@ class FileTransferService {
         return completed;
       } else {
         return _failTransfer(
-            transfer.id, '上传失败: ${response.statusCode}');
+            transfer.id, '上传失败: ${httpResponse.statusCode}');
       }
     } catch (e) {
       Logger.e('发送文件失败', e);
@@ -162,8 +217,11 @@ class FileTransferService {
       final sink = file.openWrite();
       var bytesReceived = 0;
       final startTime = DateTime.now();
+      final digestHolder = _DigestHolder();
+      final sha256Sink = sha256.startChunkedConversion(digestHolder);
       await for (final chunk in dataStream) {
         sink.add(chunk);
+        sha256Sink.add(chunk);
         bytesReceived += chunk.length;
 
         final now = DateTime.now();
@@ -187,17 +245,14 @@ class FileTransferService {
       }
 
       await sink.close();
-
-      // 读取文件计算 SHA-256
-      final receivedFile = File(filePath);
-      final fileBytes = await receivedFile.readAsBytes();
-      final hash = sha256.convert(fileBytes).toString();
+      sha256Sink.close();
+      final hash = digestHolder.digest?.toString() ?? '';
 
       final completed = transfer.copyWith(
         status: TransferStatus.completed,
         progress: 1.0,
         bytesTransferred: fileSize,
-        sha256: hash.toString(),
+        sha256: hash,
         completedAt: DateTime.now(),
       );
 
@@ -314,6 +369,11 @@ class FileTransferService {
       '7z': 'application/x-7z-compressed',
       'mp3': 'audio/mpeg',
       'mp4': 'video/mp4',
+      'mkv': 'video/x-matroska',
+      'avi': 'video/x-msvideo',
+      'mov': 'video/quicktime',
+      'wmv': 'video/x-ms-wmv',
+      'flv': 'video/x-flv',
       'apk': 'application/vnd.android.package-archive',
     };
     return mimeMap[ext] ?? 'application/octet-stream';
