@@ -75,6 +75,7 @@ class HttpServerService {
     for (var port = startPort; port <= maxPort; port++) {
       try {
         _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
+        _server!.idleTimeout = null; // 禁用空闲超时，防止大文件接收时服务器单方面断连
         _port = port;
         Logger.i('HTTP 服务器启动在端口 $_port');
 
@@ -224,7 +225,7 @@ class HttpServerService {
     router.post('/api/v1/file/upload', (request) async {
       try {
         final transferId = request.headers['X-Transfer-Id'] ?? '';
-        final fileName = request.headers['X-File-Name'] ?? 'unknown';
+        final fileName = Uri.decodeComponent(request.headers['X-File-Name'] ?? 'unknown');
         final fileSizeStr = request.headers['X-File-Size'] ?? '0';
         final fileSize = int.tryParse(fileSizeStr) ?? 0;
 

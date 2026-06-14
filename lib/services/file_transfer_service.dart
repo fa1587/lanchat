@@ -107,7 +107,7 @@ class FileTransferService {
       final httpRequest = await httpClient.postUrl(uri);
       // followRedirects 在 postUrl 后设置无效，跳过
       httpRequest.headers.set('X-Transfer-Id', transfer.id);
-      httpRequest.headers.set('X-File-Name', fileName);
+      httpRequest.headers.set('X-File-Name', Uri.encodeComponent(fileName));
       httpRequest.headers.set('X-File-Size', fileSize.toString());
       httpRequest.headers
           .set('Content-Type', 'application/octet-stream');
@@ -118,6 +118,7 @@ class FileTransferService {
       final digestHolder = _DigestHolder();
       final sha256Sink = sha256.startChunkedConversion(digestHolder);
       var bytesTransferred = 0;
+      var bytesSinceLastFlush = 0;
       final startTime = DateTime.now();
       var lastFlushTime = DateTime.now();
 
@@ -133,13 +134,15 @@ class FileTransferService {
           sha256Sink.add(chunk);
           httpRequest.add(chunk);
           bytesTransferred += chunk.length;
+          bytesSinceLastFlush += chunk.length;
 
           // 定期 flush（每5秒或每50MB），确保数据发出去维持连接活跃
           final now = DateTime.now();
           if (now.difference(lastFlushTime).inSeconds >= 5 ||
-              bytesTransferred - (bytesTransferred - chunk.length) > 50 * 1024 * 1024) {
+              bytesSinceLastFlush > 50 * 1024 * 1024) {
             try {
               httpRequest.flush();
+              bytesSinceLastFlush = 0;
             } catch (_) {}
             lastFlushTime = now;
           }
