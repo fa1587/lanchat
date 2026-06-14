@@ -212,6 +212,50 @@ class MessageService {
     await sendMessage(target, msg);
   }
 
+  /// 通过 WebSocket 发送文件传输进度（发送端调用，接收端实时显示进度条）
+  void sendFileProgress(Device target, {
+    required String transferId,
+    required double progress,
+    required int bytesTransferred,
+    required double speedBps,
+  }) {
+    final channel = _connections[target.id];
+    if (channel == null) return;
+    try {
+      channel.sink.add(jsonEncode({
+        'type': 'file_progress',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'senderId': _deviceId,
+        'payload': {
+          'transferId': transferId,
+          'progress': progress,
+          'bytesTransferred': bytesTransferred,
+          'speedBps': speedBps,
+        },
+      }));
+    } catch (_) {}
+  }
+
+  /// 通过 WebSocket 发送文件传输完成通知
+  void sendFileComplete(Device target, {required String transferId}) {
+    final channel = _connections[target.id];
+    if (channel == null) return;
+    try {
+      channel.sink.add(jsonEncode({
+        'type': 'file_complete',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'senderId': _deviceId,
+        'payload': {
+          'transferId': transferId,
+        },
+      }));
+    } catch (_) {}
+  }
+
+  // 文件传输进度回调：收到 file_progress 消息时调用
+  void Function(String transferId, double progress, int bytesTransferred, double speedBps)?
+      onFileProgressReceived;
+
   /// 处理收到的消息
   void _handleMessage(String data, String remoteDeviceId) {
     try {
@@ -229,6 +273,25 @@ class MessageService {
 
       if (type == 'handshake') {
         Logger.d('收到握手: $remoteDeviceId');
+        return;
+      }
+
+      // 文件传输进度消息（发送端通过 WebSocket 实时推送）
+      if (type == 'file_progress') {
+        final payload = json['payload'] as Map<String, dynamic>? ?? {};
+        final transferId = payload['transferId'] as String? ?? '';
+        final progress = (payload['progress'] as num?)?.toDouble() ?? 0.0;
+        final bytesTransferred = payload['bytesTransferred'] as int? ?? 0;
+        final speedBps = (payload['speedBps'] as num?)?.toDouble() ?? 0.0;
+        onFileProgressReceived?.call(transferId, progress, bytesTransferred, speedBps);
+        return;
+      }
+
+      // 文件传输完成通知
+      if (type == 'file_complete') {
+        final payload = json['payload'] as Map<String, dynamic>? ?? {};
+        final transferId = payload['transferId'] as String? ?? '';
+        onFileProgressReceived?.call(transferId, 1.0, 0, 0);
         return;
       }
 

@@ -5,6 +5,7 @@ import 'network_service.dart';
 import 'discovery_service.dart';
 import 'http_server_service.dart';
 import 'file_transfer_service.dart';
+import '../models/device.dart';
 import '../models/file_transfer.dart';
 import 'message_service.dart';
 import 'database_service.dart';
@@ -135,6 +136,40 @@ class AppServices {
         'fileSize': result.bytesTransferred,
         'sha256': result.sha256 ?? '',
       };
+    };
+
+    // === WebSocket 进度推送接线 ===
+    // 发送端：FileTransferService 进度更新 → 通过 WebSocket 发给接收端
+    fileTransferService.onSendProgress =
+        (targetDeviceId, transferId, progress, bytesTransferred, speedBps) {
+      // 用最小 Device 对象调用 sendFileProgress（只需要 target.id 找 WebSocket 连接）
+      messageService.sendFileProgress(
+        Device(
+          id: targetDeviceId, name: '', ip: '', port: 0, platform: '',
+          firstSeen: DateTime.now(), lastSeen: DateTime.now(), isOnline: true,
+        ),
+        transferId: transferId,
+        progress: progress,
+        bytesTransferred: bytesTransferred,
+        speedBps: speedBps,
+      );
+    };
+    fileTransferService.onSendComplete =
+        (targetDeviceId, transferId) {
+      messageService.sendFileComplete(
+        Device(
+          id: targetDeviceId, name: '', ip: '', port: 0, platform: '',
+          firstSeen: DateTime.now(), lastSeen: DateTime.now(), isOnline: true,
+        ),
+        transferId: transferId,
+      );
+    };
+
+    // 接收端：WebSocket file_progress 消息 → 更新 FileTransferService 进度
+    messageService.onFileProgressReceived =
+        (transferId, progress, bytesTransferred, speedBps) {
+      fileTransferService.updateReceiveProgress(
+        transferId, progress, bytesTransferred, speedBps);
     };
 
     // 设备发现（仅在非 Web 环境启动）
