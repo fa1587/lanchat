@@ -124,6 +124,9 @@ class MessageService {
     }
   }
 
+  /// 检查与目标设备的 WebSocket 连接是否已建立
+  bool hasConnection(String deviceId) => _connections.containsKey(deviceId);
+
   /// 主动连接到远程设备
   Future<void> connectToDevice(Device device) async {
     if (_connections.containsKey(device.id)) return;
@@ -210,6 +213,31 @@ class MessageService {
   /// 发送文件消息（在文件传输准备完成后调用）
   Future<void> sendFileMessage(Device target, Message msg) async {
     await sendMessage(target, msg);
+  }
+
+  /// 接收端：文件上传开始时立即创建消息（让气泡显示进度）
+  void addReceiveFileMessage({
+    required String transferId,
+    required String fileName,
+    required int fileSize,
+    required String senderId,
+    required String senderName,
+  }) {
+    final msg = Message(
+      id: transferId,
+      type: MessageType.file,
+      transferId: transferId,
+      fileName: fileName,
+      fileSize: fileSize,
+      mimeType: 'application/octet-stream',
+      senderId: senderId,
+      senderName: senderName,
+      receiverId: _deviceId,
+      timestamp: DateTime.now(),
+      status: MessageStatus.delivered,
+    );
+    _addToHistory(msg);
+    _messageController.add(msg);
   }
 
   /// 通过 WebSocket 发送文件传输进度（发送端调用，接收端实时显示进度条）
@@ -368,6 +396,10 @@ class MessageService {
   void _addToHistory(Message msg) {
     final key = msg.senderId == _deviceId ? msg.receiverId : msg.senderId;
     _messageHistory.putIfAbsent(key, () => []);
+    // 去重：同 ID 消息不重复添加（接收端文件消息可能由 HTTP 上传和 WebSocket 两条路径创建）
+    if (_messageHistory[key]!.any((m) => m.id == msg.id)) {
+      return;
+    }
     _messageHistory[key]!.add(msg);
 
     // 持久化到 SQLite

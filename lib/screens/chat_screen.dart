@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 import '../models/device.dart';
 import '../models/message.dart';
 import '../models/file_transfer.dart';
@@ -12,7 +12,6 @@ import '../providers/message_provider.dart';
 import '../providers/file_transfer_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/message_bubble.dart';
-import '../widgets/file_transfer_tile.dart';
 
 /// 聊天页面
 class ChatScreen extends ConsumerStatefulWidget {
@@ -31,17 +30,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final Set<String> _notifiedTransferIds = {};
   bool _isDraggingOver = false; // 拖拽悬停状态
 
+  /// 本地维护的活跃传输列表，由 stream 驱动 setState 更新
+  List<FileTransfer> _activeTransfers = [];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updater.start(ref, widget.device.id);
+      // 延迟一帧再订阅 stream，确保 FileTransferService 已初始化
+      _setupTransferListener();
     });
-    // 监听文件接收完成，弹 Snackbar
-    _transferSub = ref
-        .read(fileTransferServiceProvider)
-        ?.activeStream
-        .listen((transfers) {
+  }
+
+  /// 订阅 FileTransferService 的进度 stream
+  void _setupTransferListener() {
+    final ftService = ref.read(fileTransferServiceProvider);
+    if (ftService == null) {
+      // 服务还没初始化，100ms 后重试
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) _setupTransferListener();
+      });
+      return;
+    }
+    _transferSub = ftService.activeStream.listen((transfers) {
+      if (!mounted) return;
+      // 更新本地传输列表 + setState 触发 UI 刷新
+      setState(() {
+        _activeTransfers = transfers;
+      });
+      // 文件接收完成弹 Snackbar
       for (final t in transfers) {
         if (t.direction == TransferDirection.receive &&
             t.status == TransferStatus.completed &&
@@ -88,9 +106,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final messages = ref.watch(chatMessagesProvider(widget.device.id));
     final myDeviceId = ref.watch(settingsProvider).deviceId;
-    final activeTransfers =
-        ref.watch(activeTransfersProvider).valueOrNull ?? [];
-    final deviceTransfers = activeTransfers
+    // 用本地 _activeTransfers（由 setState 驱动），不用 StreamProvider
+    final deviceTransfers = _activeTransfers
         .where((t) => t.remoteDeviceId == widget.device.id)
         .toList();
 
@@ -119,8 +136,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           setState(() => _isDraggingOver = false);
           // 处理拖拽进来的文件
           final files = details.files
-              .where((f) => f.path != null)
-              .map((f) => File(f.path!))
+              .map((f) => File(f.path))
               .toList();
           if (files.isEmpty) return;
           for (final file in files) {
@@ -190,7 +206,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Widget _buildMessageList(List<dynamic> items, String myDeviceId) {
+    Widget _buildMessageList(List<dynamic> items, String myDeviceId) {
     if (items.isEmpty) {
       return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -213,26 +229,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
 
+    // 建立 transferId → FileTransfer 索引，供气泡查找进度
+    final transferMap = <String, FileTransfer>{};
+    for (final item in items) {
+      if (item is FileTransfer) {
+        transferMap[item.id] = item;
+      }
+    }
+
+    // 只显示 Message，不把 FileTransfer 作为独立 item 显示
+    final messagesOnly = items.whereType<Message>().toList();
+
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: items.length,
+      itemCount: messagesOnly.length,
       itemBuilder: (_, i) {
-        final item = items[i];
-        if (item is Message) return MessageBubble(
-          message: item,
-          isMine: item.senderId == myDeviceId,
+        final msg = messagesOnly[i];
+        final transfer = msg.transferId != null ? transferMap[msg.transferId] : null;
+        return MessageBubble(
+          message: msg,
+          isMine: msg.senderId == myDeviceId,
+          transfer: transfer,
         );
-        if (item is FileTransfer)
-          return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: FileTransferTile(
-                transfer: item,
-                onTap: item.localPath != null
-                    ? () => _openFileLocation(item.localPath!)
-                    : null,
-              ));
-        return const SizedBox.shrink();
       },
     );
   }
@@ -316,32 +335,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final ftService = ref.read(fileTransferServiceProvider);
     if (ftService == null) return;
 
-    try {
-      final transfer = await ftService.sendFile(widget.device, file);
-      // 发送文件消息通知
+    // 预生成 transferId，在 Message 和 FileTransfer 之间建立关联
+    final transferId = const Uuid().v4();
+    final fileName = file.path.split('/').last.split('\\').last;
+    final fileSize = await file.length();
+
+    // 1. 立即创建文件消息并加入 provider（乐观更新，进度条才能显示）
+    final msg = Message.file(
+      id: transferId,
+      transferId: transferId,
+      fileName: fileName,
+      fileSize: fileSize,
+      mimeType: 'application/octet-stream',
+      senderId: ref.read(settingsProvider).deviceId,
+      senderName: ref.read(settingsProvider).deviceName,
+      receiverId: widget.device.id,
+    );
+    final notifier = ref.read(chatMessagesProvider(widget.device.id).notifier);
+    notifier.state = [...notifier.state, msg];
+
+    // 2. 开始上传（不 await，不阻塞 UI）
+    ftService.sendFile(widget.device, file, id: transferId).then((transfer) {
+      // 3. 上传完成后通过 WebSocket 发送文件消息给接收端
       final msgService = ref.read(messageServiceProvider);
       if (msgService != null) {
-        final msg = Message.file(
-          id: transfer.id,
-          transferId: transfer.id,
-          fileName: transfer.fileName,
-          fileSize: transfer.fileSize,
-          mimeType: transfer.mimeType,
-          senderId: ref.read(settingsProvider).deviceId,
-          senderName: ref.read(settingsProvider).deviceName,
-          receiverId: widget.device.id,
-        );
         msgService.sendFileMessage(widget.device, msg);
       }
-
-      if (transfer.status == TransferStatus.failed) {
+      // 4. 处理失败
+      if (transfer.status == TransferStatus.failed && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('文件发送失败：${transfer.errorReason ?? "未知错误"}')));
       }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('发送失败: $e')));
-    }
+    });
   }
 
   List<dynamic> _mergeMessagesAndTransfers(

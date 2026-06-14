@@ -3,16 +3,19 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/message.dart';
+import '../models/file_transfer.dart';
 
 /// 消息气泡组件
 class MessageBubble extends StatelessWidget {
   final Message message;
   final bool isMine; // 是否是自己发送的
+  final FileTransfer? transfer; // 对应的文件传输（含进度）
 
   const MessageBubble({
     super.key,
     required this.message,
     this.isMine = false,
+    this.transfer,
   });
 
   @override
@@ -152,36 +155,110 @@ class MessageBubble extends StatelessWidget {
         );
 
       case MessageType.file:
-        return Row(
+        final t = transfer;
+        if (t == null) {
+          // 没有传输进度信息，显示静态文件消息
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.insert_drive_file_outlined, color: textColor, size: 32),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      message.fileName ?? '文件',
+                      style: TextStyle(
+                          color: textColor,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (message.fileSize != null)
+                      Text(
+                        _formatSize(message.fileSize!),
+                        style: TextStyle(
+                            color: textColor.withAlpha(150),
+                            fontSize: 11),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+        // t 已判空，下方安全使用
+        final isTransferring = t.status == TransferStatus.transferring;
+        final isCompleted = t.status == TransferStatus.completed;
+        final isFailed = t.status == TransferStatus.failed;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.insert_drive_file_outlined,
-              color: textColor,
-              size: 32,
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    message.fileName ?? '文件',
-                    style: TextStyle(
-                        color: textColor,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isCompleted ? Icons.check_circle : Icons.insert_drive_file_outlined,
+                  color: isCompleted
+                      ? Colors.green
+                      : isFailed
+                          ? Colors.red
+                          : textColor,
+                  size: 32,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        message.fileName ?? '文件',
+                        style: TextStyle(
+                            color: textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (message.fileSize != null)
+                        Text(
+                          _formatSize(message.fileSize!),
+                          style: TextStyle(
+                              color: textColor.withAlpha(150),
+                              fontSize: 11),
+                        ),
+                      if (isTransferring) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '${(t.progress * 100).toStringAsFixed(0)}% · ${_formatSpeed(t.speedBps)}',
+                          style: TextStyle(
+                              color: textColor.withAlpha(180),
+                              fontSize: 11),
+                        ),
+                      ],
+                      if (isFailed && t.errorReason != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          '失败: ${t.errorReason}',
+                          style: const TextStyle(color: Colors.red, fontSize: 10),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
                   ),
-                  if (message.fileSize != null)
-                    Text(
-                      _formatSize(message.fileSize!),
-                      style: TextStyle(
-                          color: textColor.withAlpha(150), fontSize: 11),
-                    ),
-                ],
-              ),
+                ),
+              ],
             ),
+            if (isTransferring) ...[
+              const SizedBox(height: 6),
+              LinearProgressIndicator(
+                value: t.progress,
+                borderRadius: BorderRadius.circular(4),
+                minHeight: 4,
+              ),
+            ],
           ],
         );
 
@@ -236,6 +313,14 @@ class MessageBubble extends StatelessWidget {
       return '${(bytes / 1024).toStringAsFixed(1)} KB';
     }
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  String _formatSpeed(double bps) {
+    if (bps < 1024) return '${bps.toStringAsFixed(0)} B/s';
+    if (bps < 1024 * 1024) {
+      return '${(bps / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${(bps / (1024 * 1024)).toStringAsFixed(1)} MB/s';
   }
 
   Uint8List _fromBase64(String base64) {

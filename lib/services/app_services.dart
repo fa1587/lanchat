@@ -121,6 +121,16 @@ class AppServices {
         required Stream<List<int>> dataStream,
         String? remoteDeviceId,
         String? remoteDeviceName}) async {
+      // 上传开始时立即创建消息，让接收端气泡显示进度
+      if (remoteDeviceId != null) {
+        messageService.addReceiveFileMessage(
+          transferId: transferId,
+          fileName: fileName,
+          fileSize: fileSize,
+          senderId: remoteDeviceId,
+          senderName: remoteDeviceName ?? '未知',
+        );
+      }
       final result = await fileTransferService.handleReceiveFile(
         transferId: transferId,
         fileName: fileName,
@@ -164,6 +174,20 @@ class AppServices {
         transferId: transferId,
       );
     };
+    // 发送前确保 WebSocket 连接已建立（进度推送需要 WS 通道）
+    fileTransferService.ensureWebSocketConnected =
+        (targetDeviceId) async {
+      if (!messageService.hasConnection(targetDeviceId)) {
+        // 找设备信息来建连 — 从 discoveryService 或手动列表中查找
+        final device = _findDeviceById(targetDeviceId);
+        if (device != null) {
+          await messageService.connectToDevice(device);
+          return messageService.hasConnection(targetDeviceId);
+        }
+        return false;
+      }
+      return true;
+    };
 
     // 接收端：WebSocket file_progress 消息 → 更新 FileTransferService 进度
     messageService.onFileProgressReceived =
@@ -185,6 +209,30 @@ class AppServices {
 
     _started = true;
     Logger.i('LanChat 服务启动完成 (IP: $localIp, 端口: $httpPort)');
+  }
+
+  /// 根据 ID 查找设备（从发现服务中查找）
+  Device? _findDeviceById(String id) {
+    if (_discoveryService != null) {
+      try {
+        final devices = _discoveryService!.deviceList;
+        for (final d in devices) {
+          if (d.id == id) return d;
+        }
+      } catch (_) {}
+    }
+    // 手动设备的 id 格式为 manual_ip_port
+    if (id.startsWith('manual_')) {
+      final parts = id.replaceFirst('manual_', '').split('_');
+      if (parts.length >= 2) {
+        return Device(
+          id: id, name: '设备', ip: parts[0],
+          port: int.tryParse(parts[1]) ?? 30000, platform: '',
+          firstSeen: DateTime.now(), lastSeen: DateTime.now(), isOnline: true,
+        );
+      }
+    }
+    return null;
   }
 
   /// 停止所有服务

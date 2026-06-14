@@ -41,6 +41,10 @@ class FileTransferService {
   /// 发送端传输完成回调（由 AppServices 注入，通过 WebSocket 通知接收端）
   void Function(String targetDeviceId, String transferId)? onSendComplete;
 
+  /// 发送前确保 WebSocket 连接的回调（由 AppServices 注入）
+  /// 返回 true 表示连接已就绪，false 表示连接失败
+  Future<bool> Function(String targetDeviceId)? ensureWebSocketConnected;
+
   /// 文件接收完成回调（UI 层设置，用于弹通知）
   void Function(FileTransfer transfer)? onFileReceivedUI;
 
@@ -75,6 +79,7 @@ class FileTransferService {
   Future<FileTransfer> sendFile(
     Device target,
     File file, {
+    String? id,
     void Function(double progress, double speedBps)? onProgress,
   }) async {
     final fileName = file.path.split('/').last.split('\\').last;
@@ -82,20 +87,29 @@ class FileTransferService {
     final mimeType = _guessMimeType(fileName);
 
     final transfer = FileTransfer(
-      id: _uuid.v4(),
+      id: id ?? _uuid.v4(),
       fileName: fileName,
       fileSize: fileSize,
       mimeType: mimeType,
       remoteDeviceId: target.id,
       remoteDeviceName: target.name,
       direction: TransferDirection.send,
+      status: TransferStatus.transferring, // 立即进入传输状态
       createdAt: DateTime.now(),
     );
 
     _transfers[transfer.id] = transfer;
     _emitTransfers();
+    // 重置节流状态（防止上次传输残留值影响新传输）
+    _lastEmitTime = null;
+    _lastEmitBytes = 0;
 
     try {
+      // 确保 WebSocket 已连接（进度推送依赖 WebSocket，否则接收端看不到进度）
+      if (ensureWebSocketConnected != null) {
+        await ensureWebSocketConnected!(target.id);
+      }
+
       // 预检：ping 对方确认连通性
       Logger.i('文件传输：准备 ping ${target.baseUrl}/api/v1/ping');
       final pingError = await HttpServerService.ping(target.baseUrl);
@@ -155,9 +169,15 @@ class FileTransferService {
           httpRequest.add(chunk);
           bytesTransferred += chunk.length;
 
-          // 更新进度（每200ms刷新一次UI，避免频繁emit）
+          // 更新进度（双条件节流：每200ms 或 每512KB，取先到者）
+          // 修复：之前用 `_lastEmitTime ?? now` 当 _lastEmitTime 为 null 时 diff 永远为 0，
+          // 导致 if 块永远不进入、_lastEmitTime 永远不被赋值 → 逻辑死锁
           final now = DateTime.now();
-          if (now.difference(_lastEmitTime ?? now).inMilliseconds > 200) {
+          final timeSinceLastEmit = _lastEmitTime != null
+              ? now.difference(_lastEmitTime!).inMilliseconds
+              : 999999; // 首次总是触发
+          final bytesSinceLastEmit = bytesTransferred - _lastEmitBytes;
+          if (timeSinceLastEmit > 200 || bytesSinceLastEmit > 512 * 1024) {
             final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
             final progress = bytesTransferred / fileSize;
             final speedBps = elapsed > 0 ? (bytesTransferred / elapsed) : 0.0;
@@ -170,6 +190,7 @@ class FileTransferService {
             );
             _emitTransfers();
             _lastEmitTime = now;
+            _lastEmitBytes = bytesTransferred;
 
             // 通过 WebSocket 实时推送进度给接收端
             onSendProgress?.call(
@@ -235,9 +256,29 @@ class FileTransferService {
     int bytesTransferred,
     double speedBps,
   ) {
-    final transfer = _transfers[transferId];
-    if (transfer == null) return;
-    _transfers[transferId] = transfer.copyWith(
+    final existing = _transfers[transferId];
+    if (existing == null) {
+      // handleReceiveFile 还没创建记录，先创建占位
+      // 注意：不能 return！要继续执行，让下方的 copyWith 更新 UI
+      _transfers[transferId] = FileTransfer(
+        id: transferId,
+        fileName: '接收中...',
+        fileSize: 0,
+        mimeType: 'application/octet-stream',
+        direction: TransferDirection.receive,
+        status: TransferStatus.transferring,
+        progress: progress,
+        bytesTransferred: bytesTransferred,
+        speedBps: speedBps,
+        createdAt: DateTime.now(),
+      );
+      _emitTransfers();
+      // 不 return —— 让 handleReceiveFile 后续用 copyWith 更新
+      // 这里只负责占位，不负责持久化
+      return;
+    }
+    // 记录已存在：更新进度（handleReceiveFile 创建的，或上次占位）
+    _transfers[transferId] = existing.copyWith(
       status: progress >= 1.0 ? TransferStatus.completed : TransferStatus.transferring,
       progress: progress,
       bytesTransferred: bytesTransferred,
@@ -262,21 +303,31 @@ class FileTransferService {
     final tempPath = '$dir/$safeFileName.lanchat_tmp';
     final finalPath = '$dir/$safeFileName';
 
-    // 创建传输记录（状态为 transferring，进度由发送端 WebSocket 推送）
-    final transfer = FileTransfer(
-      id: transferId,
-      fileName: safeFileName,
-      fileSize: fileSize,
-      mimeType: mimeType,
-      remoteDeviceId: remoteDeviceId,
-      remoteDeviceName: remoteDeviceName,
-      direction: TransferDirection.receive,
-      status: TransferStatus.transferring,
-      createdAt: DateTime.now(),
-    );
-
-    _transfers[transfer.id] = transfer;
-    _emitTransfers();
+    // 创建或合并传输记录
+    // 关键：如果 updateReceiveProgress 已通过 WebSocket 推送创建了占位记录，
+    // 保留占位记录的进度，只补充文件信息，避免 progress 被重置为 0
+    FileTransfer transfer;
+    final existing = _transfers[transferId];
+    if (existing == null) {
+      transfer = FileTransfer(
+        id: transferId,
+        fileName: safeFileName,
+        fileSize: fileSize,
+        mimeType: mimeType,
+        remoteDeviceId: remoteDeviceId,
+        remoteDeviceName: remoteDeviceName,
+        direction: TransferDirection.receive,
+        status: TransferStatus.transferring,
+        createdAt: DateTime.now(),
+      );
+      _transfers[transferId] = transfer;
+      _emitTransfers();
+    } else {
+      // 保留已有进度（来自 WebSocket 推送），不覆盖
+      transfer = existing;
+      _transfers[transferId] = transfer;
+      _emitTransfers();
+    }
 
     try {
       // 写入临时文件（.lanchat_tmp），传输完成后 rename 到最终路径
@@ -284,9 +335,12 @@ class FileTransferService {
       final sink = tempFile.openWrite();
       final digestHolder = _DigestHolder();
       final sha256Sink = sha256.startChunkedConversion(digestHolder);
+      var recvBytes = 0;
+
       await for (final chunk in dataStream) {
         sink.add(chunk);
         sha256Sink.add(chunk);
+        recvBytes += chunk.length;
       }
       await sink.close();
       sha256Sink.close();
@@ -294,7 +348,6 @@ class FileTransferService {
 
       // 传输完成：临时文件 → 最终路径
       await tempFile.rename(finalPath);
-      Logger.i('文件接收成功: $finalPath (SHA256: $hash)');
 
       final completed = transfer.copyWith(
         status: TransferStatus.completed,
@@ -323,6 +376,7 @@ class FileTransferService {
   }
 
   DateTime? _lastEmitTime;
+  int _lastEmitBytes = 0;
 
   Stream<FileTransfer> watch(String transferId) {
     return _transferController.stream

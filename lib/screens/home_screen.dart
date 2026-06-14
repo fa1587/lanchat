@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
@@ -18,13 +19,48 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  /// 本地维护的活跃传输列表，由 activeStream 驱动 setState 更新
+  List<FileTransfer> _activeTransfers = [];
+  StreamSubscription<List<FileTransfer>>? _transferSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // 延迟订阅，等 FileTransferService 初始化完成
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupTransferListener();
+    });
+  }
+
+  @override
+  void dispose() {
+    _transferSub?.cancel();
+    super.dispose();
+  }
+
+  /// 订阅 FileTransferService 的进度 stream（setState 直驱，不依赖 StreamProvider）
+  void _setupTransferListener() {
+    final ftService = ref.read(fileTransferServiceProvider);
+    if (ftService == null) {
+      // 服务还没初始化，100ms 后重试
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) _setupTransferListener();
+      });
+      return;
+    }
+    _transferSub = ftService.activeStream.listen((transfers) {
+      if (!mounted) return;
+      setState(() {
+        _activeTransfers = transfers;
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final services = ref.watch(appServicesProvider);
     final discoveredDevices = ref.watch(devicesProvider);
     final manualDevices = ref.watch(manualDevicesProvider);
-    final activeTransfers =
-        ref.watch(activeTransfersProvider).valueOrNull ?? [];
 
     final isLoading = services == null;
     // 合并自动发现 + 手动添加的设备
@@ -51,8 +87,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       body: Column(
         children: [
           // 活跃传输横幅
-          if (activeTransfers.isNotEmpty) ...[
-            _TransferBanner(transfers: activeTransfers),
+          if (_activeTransfers.isNotEmpty) ...[
+            _TransferBanner(transfers: _activeTransfers),
           ],
 
           // 设备列表
