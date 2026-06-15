@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import '../platform/platform_host.dart';
 
 /// 用户设置
 class Settings {
@@ -115,12 +114,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
     state = state.copyWith(isDarkMode: dark);
   }
 
-  /// 生成有区分度的默认设备名（桌面端用主机名，移动端用平台名）
+  /// 生成有区分度的默认设备名
   static String defaultDeviceName() {
-    try {
-      if (!kIsWeb) return Platform.localHostname;
-    } catch (_) {}
-    return '我的设备';
+    return PlatformHost.instance.capabilities.generateDefaultDeviceName();
   }
 }
 

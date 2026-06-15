@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:uuid/uuid.dart';
 import '../models/device.dart';
 import '../models/message.dart';
@@ -12,6 +11,7 @@ import '../providers/message_provider.dart';
 import '../providers/file_transfer_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/message_bubble.dart';
+import '../platform/platform_host.dart';
 
 /// 聊天页面
 class ChatScreen extends ConsumerStatefulWidget {
@@ -27,8 +27,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
   final _updater = ChatMessageUpdater();
   StreamSubscription<List<FileTransfer>>? _transferSub;
+  StreamSubscription<List<String>>? _dragDropSub;
   final Set<String> _notifiedTransferIds = {};
-  bool _isDraggingOver = false; // 拖拽悬停状态
 
   /// 本地维护的活跃传输列表，由 stream 驱动 setState 更新
   List<FileTransfer> _activeTransfers = [];
@@ -38,8 +38,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updater.start(ref, widget.device.id);
-      // 延迟一帧再订阅 stream，确保 FileTransferService 已初始化
       _setupTransferListener();
+      _setupDragDropListener();
+    });
+  }
+
+  /// 监听拖拽上传文件
+  void _setupDragDropListener() {
+    final receiver = PlatformHost.instance.capabilities.dragDropReceiver;
+    if (receiver == null) return;
+    _dragDropSub = receiver.droppedFiles.listen((files) {
+      for (final path in files) {
+        _sendFile(File(path));
+      }
     });
   }
 
@@ -86,16 +97,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 打开文件所在文件夹
   void _openFileLocation(String filePath) {
-    if (Platform.isWindows) {
-      Process.run('explorer', ['/select,', filePath]);
-    } else if (Platform.isLinux) {
-      Process.run('xdg-open', [File(filePath).parent.path]);
-    }
+    PlatformHost.instance.capabilities.openFileLocation(filePath);
   }
 
   @override
   void dispose() {
     _transferSub?.cancel();
+    _dragDropSub?.cancel();
     _updater.stop();
     _textController.dispose();
     _scrollController.dispose();
@@ -104,15 +112,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final messages = ref.watch(chatMessagesProvider(widget.device.id));
-    final myDeviceId = ref.watch(settingsProvider).deviceId;
-    // 用本地 _activeTransfers（由 setState 驱动），不用 StreamProvider
-    final deviceTransfers = _activeTransfers
-        .where((t) => t.remoteDeviceId == widget.device.id)
-        .toList();
-
-    final items = _mergeMessagesAndTransfers(messages, deviceTransfers);
-
     return Scaffold(
       appBar: AppBar(
         title: Column(children: [
@@ -125,88 +124,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.pop(context)),
       ),
-      body: DropTarget(
-        onDragEntered: (details) {
-          setState(() => _isDraggingOver = true);
-        },
-        onDragExited: (details) {
-          setState(() => _isDraggingOver = false);
-        },
-        onDragDone: (details) async {
-          setState(() => _isDraggingOver = false);
-          // 处理拖拽进来的文件
-          final files = details.files
-              .map((f) => File(f.path))
-              .toList();
-          if (files.isEmpty) return;
-          for (final file in files) {
-            await _sendFile(file);
-          }
-        },
-        child: Stack(children: [
-          Column(children: [
-            Expanded(child: _buildMessageList(items, myDeviceId)),
-            const Divider(height: 1),
-            _buildInputBar(context),
-          ]),
-          // 拖拽悬停遮罩
-          if (_isDraggingOver)
-            Positioned.fill(
-              child: Container(
-                color: Theme.of(context).primaryColor.withValues(alpha: 0.15),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 32, vertical: 16),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: Theme.of(context).primaryColor,
-                        width: 3,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4)),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.file_upload_outlined,
-                            size: 48,
-                            color: Theme.of(context).primaryColor),
-                        const SizedBox(height: 8),
-                        Text('释放以发送文件',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color:
-                                  Theme.of(context).colorScheme.onSurface,
-                            )),
-                        const SizedBox(height: 4),
-                        Text('支持拖拽多个文件',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.6),
-                            )),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ]),
-      ),
+      body: _buildChatBody(),
     );
   }
 
-    Widget _buildMessageList(List<dynamic> items, String myDeviceId) {
+  /// 聊天主体内容（消息列表 + 输入栏 + 拖拽遮罩）
+  Widget _buildChatBody() {
+    final messages = ref.watch(chatMessagesProvider(widget.device.id));
+    final myDeviceId = ref.watch(settingsProvider).deviceId;
+    final deviceTransfers = _activeTransfers
+        .where((t) => t.remoteDeviceId == widget.device.id)
+        .toList();
+    final items = _mergeMessagesAndTransfers(messages, deviceTransfers);
+
+    return Column(children: [
+        Expanded(child: _buildMessageList(items, myDeviceId)),
+        const Divider(height: 1),
+        _buildInputBar(context),
+      ]);
+  }
+
+  Widget _buildMessageList(List<dynamic> items, String myDeviceId) {
     if (items.isEmpty) {
       return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [

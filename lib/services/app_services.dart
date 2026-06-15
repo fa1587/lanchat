@@ -1,4 +1,3 @@
-import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'network_service.dart';
@@ -10,6 +9,7 @@ import '../models/file_transfer.dart';
 import 'message_service.dart';
 import 'database_service.dart';
 import '../utils/logger.dart';
+import '../platform/platform_host.dart';
 
 /// 应用服务总控 - 初始化和管理所有核心服务
 class AppServices {
@@ -198,6 +198,8 @@ class AppServices {
 
     // 设备发现（仅在非 Web 环境启动）
     if (!kIsWeb) {
+      // 平台特定前置操作（Android MulticastLock 等）
+      await PlatformHost.instance.capabilities.startDiscoveryBootstrap();
       _discoveryService = DiscoveryService(
         deviceId: deviceId,
         deviceName: deviceName,
@@ -238,6 +240,8 @@ class AppServices {
   /// 停止所有服务
   Future<void> stop() async {
     await _discoveryService?.stop();
+    // 平台特定后置操作（Android 释放 MulticastLock 等）
+    await PlatformHost.instance.capabilities.stopDiscoveryBootstrap();
     await httpServerService.stop();
     await messageService.dispose();
     await fileTransferService.dispose();
@@ -247,11 +251,7 @@ class AppServices {
 
   /// 生成默认设备名称
   static String defaultDeviceName() {
-    try {
-      return Platform.localHostname;
-    } catch (_) {
-      return '我的设备';
-    }
+    return PlatformHost.instance.capabilities.generateDefaultDeviceName();
   }
 
   /// 更新设备名称（重启发现服务以广播新名字）

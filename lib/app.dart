@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'screens/home_screen.dart';
@@ -7,6 +5,7 @@ import 'screens/settings_screen.dart';
 import 'providers/settings_provider.dart';
 import 'providers/device_provider.dart';
 import 'services/app_services.dart';
+import 'platform/platform_host.dart';
 
 class LanChatApp extends ConsumerWidget {
   const LanChatApp({super.key});
@@ -57,27 +56,16 @@ final _initServicesProvider = FutureProvider<AppServices?>((ref) async {
   // 等待设置从磁盘加载完成，否则会读到初始空值
   await ref.read(settingsProvider.notifier).ensureLoaded();
 
+  // 初始化平台宿主（全项目唯一判断平台身份的地方）
+  final host = PlatformHost.initialize();
+
   final settings = ref.read(settingsProvider);
   final notifier = ref.read(appServicesProvider.notifier);
-
-  final platform = kIsWeb
-      ? 'web'
-      : (Platform.isAndroid
-          ? 'android'
-          : Platform.isIOS
-              ? 'ios'
-              : Platform.isMacOS
-                  ? 'macos'
-                  : Platform.isWindows
-                      ? 'windows'
-                      : Platform.isLinux
-                          ? 'linux'
-                          : 'unknown');
 
   return notifier.initialize(
     settings.deviceId,
     settings.deviceName,
-    platform,
+    host.name,
     autoAcceptFiles: settings.autoAcceptFiles,
     downloadPath: settings.downloadPath,
   );

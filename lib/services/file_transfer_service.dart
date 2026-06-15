@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/device.dart';
 import '../models/file_transfer.dart';
 import '../utils/logger.dart';
+import '../platform/platform_host.dart';
 import 'http_server_service.dart';
 
 /// 辅助类：捕获 chunked SHA-256 的最终 Digest
@@ -68,8 +68,7 @@ class FileTransferService {
     if (_userDownloadPath.isNotEmpty) {
       _downloadDir = _userDownloadPath;
     } else {
-      final dir = await getApplicationDocumentsDirectory();
-      _downloadDir = '${dir.path}/LanChat/Received';
+      _downloadDir = await PlatformHost.instance.capabilities.getDefaultDownloadPath();
     }
     await Directory(_downloadDir!).create(recursive: true);
     return _downloadDir!;

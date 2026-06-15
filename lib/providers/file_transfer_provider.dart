@@ -23,3 +23,10 @@ final transferringProvider = Provider<List<FileTransfer>>((ref) {
       .where((t) => t.status == TransferStatus.transferring)
       .toList();
 });
+
+/// 当前生效的下载目录（读取运行时实际路径）
+final effectiveDownloadDirProvider = FutureProvider<String>((ref) async {
+  final service = ref.watch(fileTransferServiceProvider);
+  if (service == null) return '服务未启动';
+  return await service.downloadDir;
+});

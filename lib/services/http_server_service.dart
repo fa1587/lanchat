@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
 import '../utils/logger.dart';
+import '../platform/platform_host.dart';
 
 /// 辅助类：捕获 chunked SHA-256 的最终 Digest
 class _DigestHolder implements Sink<Digest> {
@@ -82,8 +83,19 @@ class HttpServerService {
 
     for (var port = startPort; port <= maxPort; port++) {
       try {
-        _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
-        _server!.idleTimeout = null; // 禁用空闲超时，防止大文件接收时服务器单方面断连
+        // 使用 HttpServer.bind 直接创建，避免 shelf_io.serve 的潜在兼容性问题
+        // Android 不支持 shared: true 和 reusePort，这里用默认值（shared: false）
+        final server = await HttpServer.bind(
+          InternetAddress.anyIPv4,
+          port,
+          backlog: 0,
+        );
+        server.idleTimeout = null; // 禁用空闲超时，防止大文件接收时服务器单方面断连
+
+        // 将 HttpServer 的请求流交给 shelf 处理
+        shelf_io.serveRequests(server, handler);
+
+        _server = server;
         _port = port;
         Logger.i('HTTP 服务器启动在端口 $_port');
 
@@ -99,6 +111,11 @@ class HttpServerService {
         }
         if (e.osError?.errorCode == 98) {
           // Linux/macOS: 端口被占用
+          Logger.d('端口 $port 被占用，尝试下一个');
+          continue;
+        }
+        if (e.osError?.errorCode == 98 || e.osError?.errorCode == 48) {
+          // Android: Address already in use
           Logger.d('端口 $port 被占用，尝试下一个');
           continue;
         }
@@ -127,41 +144,9 @@ class HttpServerService {
     Logger.i('HTTP 服务器已停止');
   }
 
-  /// 自动添加 Windows 防火墙入站规则
+  /// 自动添加防火墙入站规则（平台相关）
   Future<void> _addFirewallRule(int port) async {
-    if (!Platform.isWindows) return;
-    try {
-      final ruleName = 'LanChat HTTP Server (port $port)';
-      // 先检查规则是否已存在
-      final check = await Process.run('netsh', [
-        'advfirewall', 'firewall', 'show', 'rule',
-        'name=$ruleName',
-      ]);
-      if (check.stdout.toString().contains(ruleName)) {
-        Logger.d('防火墙规则已存在: $ruleName');
-        return;
-      }
-      // 添加入站规则（只按端口放行，不绑定程序路径，避免空格/权限问题）
-      final result = await Process.run('netsh', [
-        'advfirewall', 'firewall', 'add', 'rule',
-        'name=$ruleName',
-        'dir=in',
-        'action=allow',
-        'protocol=TCP',
-        'localport=$port',
-        'enable=yes',
-      ]);
-      if (result.exitCode == 0) {
-        Logger.i('防火墙规则已添加: $ruleName');
-      } else {
-        // 如果失败，尝试用管理员权限运行的提示
-        Logger.w('防火墙规则添加失败(exit=${result.exitCode}): ${result.stderr}');
-        Logger.w('请手动以管理员运行: netsh advfirewall firewall add rule name="$ruleName" dir=in action=allow protocol=TCP localport=$port enable=yes');
-      }
-    } catch (e) {
-      // 静默失败，不影响主流程（可能没有管理员权限）
-      Logger.d('防火墙规则添加失败（可能需要管理员权限）: $e');
-    }
+    await PlatformHost.instance.capabilities.addFirewallRule(port);
   }
 
   /// 测试目标设备连通性
@@ -261,8 +246,7 @@ class HttpServerService {
         if (_downloadPath.isNotEmpty) {
           downloadDir = _downloadPath;
         } else {
-          final dir = await getApplicationDocumentsDirectory();
-          downloadDir = '${dir.path}/LanChat/Received';
+          downloadDir = await PlatformHost.instance.capabilities.getDefaultDownloadPath();
         }
         await Directory(downloadDir).create(recursive: true);
 

@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import '../providers/settings_provider.dart';
 import '../providers/device_provider.dart';
 import '../utils/logger.dart';
+import '../platform/platform_host.dart';
 
 /// 设置页面
 class SettingsScreen extends ConsumerWidget {
@@ -16,22 +17,22 @@ class SettingsScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text('设置'),
       ),
       body: ListView(
         children: [
           // 设备信息
-          _SectionHeader(title: 'Device Info'),
+          _SectionHeader(title: '设备信息'),
           ListTile(
             leading: const Icon(Icons.phone_android),
-            title: const Text('Device Name'),
+            title: const Text('设备名称'),
             subtitle: Text(settings.deviceName),
             trailing: const Icon(Icons.edit),
             onTap: () => _editDeviceName(context, ref),
           ),
           ListTile(
             leading: const Icon(Icons.fingerprint),
-            title: const Text('Device ID'),
+            title: const Text('设备 ID'),
             subtitle: Text(
               settings.deviceId,
               style: Theme.of(context).textTheme.bodySmall,
@@ -41,19 +42,18 @@ class SettingsScreen extends ConsumerWidget {
 
           const Divider(),
 
-          // 文件设置
-          _SectionHeader(title: 'File Transfer'),
+          // 文件传输
+          _SectionHeader(title: '文件传输'),
           ListTile(
             leading: const Icon(Icons.folder),
-            title: const Text('Download Directory'),
+            title: const Text('下载目录'),
             subtitle: Text(settings.downloadPath.isEmpty
-                ? 'Default'
+                ? '默认（文档\\LanChat\\Received）'
                 : settings.downloadPath),
             onTap: () async {
               final path = await FilePicker.platform.getDirectoryPath();
               if (path != null && context.mounted) {
                 ref.read(settingsProvider.notifier).setDownloadPath(path);
-                // 同步到运行中的服务
                 final services = ref.read(appServicesProvider);
                 services?.updateDownloadPath(path);
               }
@@ -61,8 +61,8 @@ class SettingsScreen extends ConsumerWidget {
           ),
           SwitchListTile(
             secondary: const Icon(Icons.auto_awesome),
-            title: const Text('Auto Accept Files'),
-            subtitle: const Text('Automatically accept incoming files'),
+            title: const Text('自动接受文件'),
+            subtitle: const Text('收到文件时自动保存，无需手动确认'),
             value: settings.autoAcceptFiles,
             onChanged: (value) {
               ref.read(settingsProvider.notifier).setAutoAcceptFiles(value);
@@ -70,7 +70,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           ListTile(
             leading: const Icon(Icons.speed),
-            title: const Text('Max Concurrent Transfers'),
+            title: const Text('最大同时传输数'),
             subtitle: Text('${settings.maxConcurrentTransfers}'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -101,10 +101,10 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
 
           // 外观
-          _SectionHeader(title: 'Appearance'),
+          _SectionHeader(title: '外观'),
           SwitchListTile(
             secondary: const Icon(Icons.dark_mode),
-            title: const Text('Dark Mode'),
+            title: const Text('深色模式'),
             value: settings.isDarkMode,
             onChanged: (value) {
               ref.read(settingsProvider.notifier).setDarkMode(value);
@@ -114,10 +114,10 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
 
           // 权限
-          _SectionHeader(title: 'Permissions'),
+          _SectionHeader(title: '权限'),
           ListTile(
             leading: const Icon(Icons.notifications),
-            title: const Text('Notification Permission'),
+            title: const Text('通知权限'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               if (await Permission.notification.isDenied) {
@@ -127,7 +127,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           ListTile(
             leading: const Icon(Icons.storage),
-            title: const Text('Storage Permission'),
+            title: const Text('存储权限'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               if (await Permission.storage.isDenied) {
@@ -139,11 +139,17 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
 
           // 关于
-          _SectionHeader(title: 'About'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('LanChat'),
-            subtitle: Text('Version 1.0.9'),
+          _SectionHeader(title: '关于'),
+          FutureBuilder<String>(
+            future: PlatformHost.versionString(),
+            builder: (context, snapshot) {
+              final version = snapshot.data ?? '';
+              return ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('LanChat'),
+                subtitle: Text(version.isNotEmpty ? version : '...'),
+              );
+            },
           ),
 
           const SizedBox(height: 40),
@@ -159,22 +165,22 @@ class SettingsScreen extends ConsumerWidget {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit Device Name'),
+        title: const Text('修改设备名称'),
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(
-            hintText: 'Enter device name',
+            hintText: '输入设备名称',
           ),
           autofocus: true,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const Text('取消'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
+            child: const Text('保存'),
           ),
         ],
       ),
@@ -186,7 +192,7 @@ class SettingsScreen extends ConsumerWidget {
       if (services != null) {
         await services.updateDeviceName(result);
       }
-      Logger.i('Device name updated: $result');
+      Logger.i('设备名称已更新: $result');
     }
   }
 }
