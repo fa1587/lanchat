@@ -7,6 +7,7 @@ class DeviceTile extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool showManualBadge;
+  final int unreadCount;
 
   const DeviceTile({
     super.key,
@@ -14,6 +15,7 @@ class DeviceTile extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.showManualBadge = false,
+    this.unreadCount = 0,
   });
 
   @override
@@ -57,8 +59,28 @@ class DeviceTile extends StatelessWidget {
                 style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
           ],
         ),
-        trailing: device.isOnline
-            ? Container(
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (unreadCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  unreadCount > 99 ? '99+' : '$unreadCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            if (unreadCount > 0) const SizedBox(width: 6),
+            if (device.isOnline)
+              Container(
                 width: 12,
                 height: 12,
                 decoration: BoxDecoration(
@@ -72,8 +94,9 @@ class DeviceTile extends StatelessWidget {
                     ),
                   ],
                 ),
-              )
-            : null,
+              ),
+          ],
+        ),
         onTap: device.isOnline ? onTap : null,
         onLongPress: onLongPress,
         shape: RoundedRectangleBorder(

@@ -43,26 +43,29 @@ class MessageService {
   /// 收到的消息流
   Stream<Message> get messages => _messageController.stream;
 
-  /// 获取与指定设备的消息历史（同步，立即返回）
-  List<Message> getMessageHistory(String deviceId) {
+  /// 获取与指定设备的消息历史（同步，仅返回内存中的数据）
+  List<Message> getMessageHistorySync(String deviceId) {
     if (_messageHistory.containsKey(deviceId)) {
       return List.from(_messageHistory[deviceId]!);
     }
+    return [];
+  }
 
-    // 从 SQLite 异步加载（后台加载，当前返回空列表）
-    DatabaseService.instance.getMessages(deviceId).then((msgs) {
+  /// 从数据库加载历史到内存（应在 ChatScreen 打开时调用）
+  Future<void> loadMessageHistory(String deviceId) async {
+    if (_messageHistory.containsKey(deviceId)) return; // 内存中已有
+    try {
+      final msgs = await DatabaseService.instance.getMessages(deviceId);
       if (msgs.isNotEmpty) {
         _messageHistory[deviceId] = msgs;
-        // 通知监听器有新消息（实际上是历史消息）
+        // 通知监听器刷新
         for (final m in msgs) {
           _messageController.add(m);
         }
       }
-    }).catchError((e) {
+    } catch (e) {
       Logger.w('从数据库加载消息失败: $e');
-    });
-
-    return [];
+    }
   }
 
   /// 监听与指定设备的消息更新流
@@ -216,13 +219,13 @@ class MessageService {
   }
 
   /// 接收端：文件上传开始时立即创建消息（让气泡显示进度）
-  void addReceiveFileMessage({
+  Future<void> addReceiveFileMessage({
     required String transferId,
     required String fileName,
     required int fileSize,
     required String senderId,
     required String senderName,
-  }) {
+  }) async {
     final msg = Message(
       id: transferId,
       type: MessageType.file,
@@ -236,7 +239,7 @@ class MessageService {
       timestamp: DateTime.now(),
       status: MessageStatus.delivered,
     );
-    _addToHistory(msg);
+    await _addToHistory(msg);
     _messageController.add(msg);
   }
 
@@ -285,7 +288,7 @@ class MessageService {
       onFileProgressReceived;
 
   /// 处理收到的消息
-  void _handleMessage(String data, String remoteDeviceId) {
+  Future<void> _handleMessage(String data, String remoteDeviceId) async {
     try {
       final json = jsonDecode(data) as Map<String, dynamic>;
       final type = json['type'] as String? ?? '';
@@ -348,7 +351,7 @@ class MessageService {
       // 发送确认
       _sendAck(remoteDeviceId, msg.id);
 
-      _addToHistory(msg);
+      await _addToHistory(msg);
       _messageController.add(msg);
 
       Logger.d('收到消息: $msg');
@@ -393,7 +396,7 @@ class MessageService {
   }
 
   /// 添加到历史
-  void _addToHistory(Message msg) {
+  Future<void> _addToHistory(Message msg) async {
     final key = msg.senderId == _deviceId ? msg.receiverId : msg.senderId;
     _messageHistory.putIfAbsent(key, () => []);
     // 去重：同 ID 消息不重复添加（接收端文件消息可能由 HTTP 上传和 WebSocket 两条路径创建）
@@ -401,6 +404,16 @@ class MessageService {
       return;
     }
     _messageHistory[key]!.add(msg);
+
+    // 接收到的消息增加未读计数（自己发的消息不计）
+    final isReceived = msg.senderId != _deviceId;
+    if (isReceived) {
+      try {
+        await DatabaseService.instance.incrementUnreadCount(key);
+      } catch (e) {
+        Logger.e('UNREAD: increment failed', e);
+      }
+    }
 
     // 持久化到 SQLite
     try {
@@ -437,6 +450,24 @@ class MessageService {
       default:
         return MessageType.text;
     }
+  }
+
+  /// 获取所有对话的未读计数 Map<peerId, count>
+  Future<Map<String, int>> getUnreadCounts() async {
+    final convs = await DatabaseService.instance.getConversations();
+    final result = <String, int>{};
+    for (final c in convs) {
+      final count = (c['unread_count'] as int?) ?? 0;
+      if (count > 0) {
+        result[c['peer_id'] as String] = count;
+      }
+    }
+    return result;
+  }
+
+  /// 将指定对话的未读计数清零
+  Future<void> markConversationRead(String peerId) async {
+    await DatabaseService.instance.resetUnreadCount(peerId);
   }
 
   /// 清理资源

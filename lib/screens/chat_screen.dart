@@ -42,6 +42,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _setupTransferListener();
       _setupDragDropListener();
       _autoSendPendingShare();
+      _clearUnread();
+    });
+  }
+
+  /// 打开聊天时清零该设备的未读计数
+  void _clearUnread() {
+    final service = ref.read(messageServiceProvider);
+    if (service == null) return;
+    service.markConversationRead(widget.device.id).then((_) {
+      service.getUnreadCounts().then((counts) {
+        if (mounted) {
+          ref.read(unreadCountsProvider.notifier).state = counts;
+        }
+      });
     });
   }
 

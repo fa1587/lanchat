@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import '../models/message.dart';
 import '../utils/logger.dart';
@@ -16,20 +17,41 @@ class DatabaseService {
 
   Database? get db => _db;
 
+  /// 数据库是否已初始化
+  bool get isReady => _db != null;
+
   /// 初始化数据库
   Future<void> init() async {
     if (_db != null) return;
 
-    final dbPath = await getDatabasesPath();
-    final path = '$dbPath/lanchat.db';
+    try {
+      final dbPath = await getDatabasesPath();
+      final path = '$dbPath/lanchat.db';
+      _logDb('DB init: path=$path');
 
-    _db = await openDatabase(
-      path,
-      version: 1,
-      onCreate: _onCreate,
-    );
+      _db = await openDatabase(
+        path,
+        version: 1,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
+      _logDb('DB init: success, _db is now ${_db != null ? "ready" : "STILL NULL"}');
 
-    Logger.i('数据库已初始化: $path');
+      // 兼容旧数据库：确保 unread_count 列存在并初始化旧行
+      try {
+        await _db?.execute(
+            'ALTER TABLE conversations ADD COLUMN unread_count INTEGER DEFAULT 0');
+      } catch (_) {}
+      try {
+        await _db?.execute(
+            'UPDATE conversations SET unread_count = 0 WHERE unread_count IS NULL');
+      } catch (_) {}
+
+      Logger.i('数据库已初始化: $path');
+    } catch (e, st) {
+      _logDb('DB init FAILED: $e');
+      Logger.e('数据库初始化失败', e, st);
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -67,6 +89,10 @@ class DatabaseService {
     await db.execute('CREATE INDEX idx_messages_sender ON messages(sender_id, receiver_id)');
 
     Logger.i('数据库表已创建');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // 未来数据库升级时在此处理迁移
   }
 
   /// 获取或创建会话
@@ -156,6 +182,44 @@ class DatabaseService {
     return await _db!.query(
       'conversations',
       orderBy: 'last_time DESC',
+    );
+  }
+
+  /// 增加未读计数（收到新消息时调用）
+  Future<void> incrementUnreadCount(String peerId) async {
+    if (_db == null) {
+      _logDb('ERROR: _db is null, cannot increment');
+      return;
+    }
+    _logDb('incrementUnreadCount called for $peerId');
+    // 先确保会话行存在（首次通信时可能还没有）
+    await _db!.insert(
+      'conversations',
+      {'peer_id': peerId, 'peer_name': '', 'last_time': DateTime.now().millisecondsSinceEpoch},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    // 再自增
+    final cnt = await _db!.rawUpdate(
+      'UPDATE conversations SET unread_count = COALESCE(unread_count, 0) + 1 WHERE peer_id = ?',
+      [peerId],
+    );
+    _logDb('incrementUnreadCount result: $cnt rows affected');
+  }
+
+  void _logDb(String msg) {
+    try {
+      final f = File('d:/lanchat_debug.log');
+      f.writeAsStringSync('${DateTime.now().toIso8601String()} DB $msg\n', mode: FileMode.append);
+    } catch (_) {}
+  }
+
+  /// 重置未读计数为 0（打开聊天时调用）
+  Future<void> resetUnreadCount(String peerId) async {
+    await _db?.update(
+      'conversations',
+      {'unread_count': 0},
+      where: 'peer_id = ?',
+      whereArgs: [peerId],
     );
   }
 

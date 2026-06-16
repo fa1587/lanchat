@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
@@ -6,11 +7,14 @@ import '../models/file_transfer.dart';
 import '../models/share_intent_item.dart';
 import '../providers/device_provider.dart';
 import '../providers/file_transfer_provider.dart';
+import '../providers/message_provider.dart';
 import '../widgets/device_tile.dart';
 import '../widgets/device_picker_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/file_transfer_tile.dart';
 import 'chat_screen.dart';
+import '../services/message_service.dart';
+import '../services/database_service.dart';
 
 /// 主页 —— 显示附近设备列表和活跃传输
 class HomeScreen extends ConsumerStatefulWidget {
@@ -34,6 +38,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupTransferListener();
       _setupShareListener();
+      _setupUnreadListener();
     });
   }
 
@@ -67,6 +72,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final services = ref.watch(appServicesProvider);
     final discoveredDevices = ref.watch(devicesProvider);
     final manualDevices = ref.watch(manualDevicesProvider);
+    final unreadCounts = ref.watch(unreadCountsProvider);
 
     final isLoading = services == null;
     // 合并自动发现 + 手动添加的设备
@@ -133,6 +139,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             return DeviceTile(
                               device: device,
                               showManualBadge: isManual,
+                              unreadCount: unreadCounts[device.id] ?? 0,
                               onTap: () =>
                                   _openChat(context, device),
                               onLongPress: isManual
@@ -321,6 +328,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     } finally {
       _handlingShare = false;
     }
+  }
+
+  /// 监听新消息，刷新未读计数
+  void _setupUnreadListener() {
+    final msgService = ref.read(messageServiceProvider);
+    if (msgService == null) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) _setupUnreadListener();
+      });
+      return;
+    }
+
+    // 启动时加载已有未读计数
+    _refreshUnreadCounts(msgService);
+
+    // 收到新消息时刷新
+    msgService.messages.listen((_) {
+      _refreshUnreadCounts(msgService);
+    });
+  }
+
+  Future<void> _refreshUnreadCounts(MessageService msgService) async {
+    final counts = await msgService.getUnreadCounts();
+    // 诊断：直接查数据库原始数据
+    try {
+      final dbs = DatabaseService.instance;
+      _logDebug('DB status: isReady=${dbs.isReady}, db=${dbs.db}');
+      final db = dbs.db;
+      if (db != null) {
+        final allConvs = await db.query('conversations');
+        _logDebug('DB RAW conversations: ${allConvs.length} rows');
+        for (final c in allConvs) {
+          _logDebug('  peer_id=${c['peer_id']}, unread_count=${c['unread_count']} (type: ${c['unread_count']?.runtimeType})');
+        }
+      }
+    } catch (e) {
+      _logDebug('DB query error: $e');
+    }
+    _logDebug('UNREAD refresh: ${counts.length} conversations with unread, keys=${counts.keys.toList()}');
+    if (mounted) {
+      ref.read(unreadCountsProvider.notifier).state = counts;
+    }
+  }
+
+  void _logDebug(String msg) {
+    try {
+      final f = File('d:/lanchat_debug.log');
+      f.writeAsStringSync('${DateTime.now().toIso8601String()} HOME $msg\n', mode: FileMode.append);
+    } catch (_) {}
   }
 
   void _openChat(BuildContext context, Device device) {
