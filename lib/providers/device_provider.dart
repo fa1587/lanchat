@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
+import '../models/share_intent_item.dart';
 import '../services/app_services.dart';
 
 /// 应用服务总控
@@ -110,3 +111,15 @@ class ManualDevicesNotifier extends StateNotifier<List<Device>> {
     state = [];
   }
 }
+
+// ===================== 分享意图 =====================
+
+/// 分享事件流（冷/热启动时从 AppServices.shareStream 获取）
+final shareStreamProvider = StreamProvider<ShareIntentItem>((ref) {
+  final services = ref.watch(appServicesProvider);
+  if (services == null) return const Stream.empty();
+  return services.shareStream;
+});
+
+/// 待处理的分享数据（从系统分享接收到的文件/文本）
+final pendingShareItemProvider = StateProvider<ShareIntentItem?>((ref) => null);

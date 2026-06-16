@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:permission_handler/permission_handler.dart';
+import '../services/share_intent_service.dart';
 
 /// 拖拽文件接收器接口
 abstract class DragDropReceiver {
@@ -65,6 +66,9 @@ abstract class PlatformCapabilities {
 
   /// 是否支持接收系统分享意图
   bool get supportsShareIntent;
+
+  /// 分享意图服务（不支持返回 null）
+  ShareIntentService? get shareIntentService;
 
   /// 已启用的平台特性名称列表（显示在设置页版本信息中）
   List<String> get enabledFeatures;

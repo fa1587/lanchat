@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
 import '../models/file_transfer.dart';
+import '../models/share_intent_item.dart';
 import '../providers/device_provider.dart';
 import '../providers/file_transfer_provider.dart';
 import '../widgets/device_tile.dart';
+import '../widgets/device_picker_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/file_transfer_tile.dart';
 import 'chat_screen.dart';
@@ -22,19 +24,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// 本地维护的活跃传输列表，由 activeStream 驱动 setState 更新
   List<FileTransfer> _activeTransfers = [];
   StreamSubscription<List<FileTransfer>>? _transferSub;
+  StreamSubscription<ShareIntentItem>? _shareSub;
+  bool _handlingShare = false;
 
   @override
   void initState() {
     super.initState();
-    // 延迟订阅，等 FileTransferService 初始化完成
+    // 延迟订阅，等服务初始化完成
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupTransferListener();
+      _setupShareListener();
     });
   }
 
   @override
   void dispose() {
     _transferSub?.cancel();
+    _shareSub?.cancel();
     super.dispose();
   }
 
@@ -247,6 +253,74 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _removeManual(String deviceId) {
     ref.read(manualDevicesProvider.notifier).removeDevice(deviceId);
+  }
+
+  /// 监听分享意图 — 收到分享时弹出设备选择
+  void _setupShareListener() {
+    final services = ref.read(appServicesProvider);
+    if (services == null) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) _setupShareListener();
+      });
+      return;
+    }
+    // 1. 先注册热启动监听（防止漏掉运行中收到的分享）
+    _shareSub = services.shareStream.listen((item) {
+      if (!mounted || _handlingShare) return;
+      _handleShare(item);
+    });
+    // 2. 再检查冷启动数据（监听就绪后再拉取，确保不丢失）
+    services.checkInitialShare();
+  }
+
+  /// 处理收到的分享数据：选设备 → 打开聊天 → 自动发送
+  Future<void> _handleShare(ShareIntentItem item) async {
+    _handlingShare = true;
+    try {
+      // 将分享数据存入待处理状态，ChatScreen 会在 init 时读取
+      ref.read(pendingShareItemProvider.notifier).state = item;
+
+      final devices = ref.read(devicesProvider);
+      final onlineDevices =
+          devices.where((d) => d.isOnline).toList();
+
+      if (onlineDevices.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('没有在线设备，请稍后再试')),
+          );
+        }
+        return;
+      }
+
+      Device? target;
+      if (onlineDevices.length == 1) {
+        // 只有一个在线设备，直接发送
+        target = onlineDevices.first;
+      } else {
+        // 多个在线设备，弹出选择器
+        target = await DevicePickerDialog.show(
+          context,
+          devices: onlineDevices,
+        );
+      }
+
+      if (target != null && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              device: target!,
+            ),
+          ),
+        );
+      } else {
+        // 用户取消选择，清除待处理数据
+        ref.read(pendingShareItemProvider.notifier).state = null;
+      }
+    } finally {
+      _handlingShare = false;
+    }
   }
 
   void _openChat(BuildContext context, Device device) {

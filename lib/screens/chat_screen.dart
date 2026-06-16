@@ -10,6 +10,7 @@ import '../models/file_transfer.dart';
 import '../providers/message_provider.dart';
 import '../providers/file_transfer_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/device_provider.dart';
 import '../widgets/message_bubble.dart';
 import '../platform/platform_host.dart';
 
@@ -40,6 +41,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _updater.start(ref, widget.device.id);
       _setupTransferListener();
       _setupDragDropListener();
+      _autoSendPendingShare();
     });
   }
 
@@ -49,6 +51,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (receiver == null) return;
     _dragDropSub = receiver.droppedFiles.listen((files) {
       for (final path in files) {
+        _sendFile(File(path));
+      }
+    });
+  }
+
+  /// 自动发送从系统分享接收到的文件
+  void _autoSendPendingShare() {
+    final pending = ref.read(pendingShareItemProvider);
+    if (pending == null || !pending.hasFiles) return;
+
+    // 清除待处理数据，避免重复发送
+    ref.read(pendingShareItemProvider.notifier).state = null;
+
+    // 延迟一小段时间确保服务就绪
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      for (final path in pending.filePaths) {
         _sendFile(File(path));
       }
     });
@@ -273,6 +292,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final ftService = ref.read(fileTransferServiceProvider);
     if (ftService == null) return;
 
+    // 发送前主动刷新心跳，防止接收端因心跳超时判离线
+    ref.read(appServicesProvider)?.pingDiscovery();
+
     // 预生成 transferId，在 Message 和 FileTransfer 之间建立关联
     final transferId = const Uuid().v4();
     final fileName = file.path.split('/').last.split('\\').last;
@@ -294,6 +316,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     // 2. 开始上传（不 await，不阻塞 UI）
     ftService.sendFile(widget.device, file, id: transferId).then((transfer) {
+      // 传输完成后刷新心跳
+      ref.read(appServicesProvider)?.pingDiscovery();
       // 3. 上传完成后通过 WebSocket 发送文件消息给接收端
       final msgService = ref.read(messageServiceProvider);
       if (msgService != null) {

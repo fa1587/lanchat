@@ -11,8 +11,8 @@ import '../utils/logger.dart';
 class DiscoveryService {
   static const String _serviceType = '_lanchat._tcp';
   static const int _udpPort = 23456;
-  static const Duration _heartbeatInterval = Duration(seconds: 10);
-  static const Duration _offlineTimeout = Duration(seconds: 20);
+  static const Duration _heartbeatInterval = Duration(seconds: 5);
+  static const Duration _offlineTimeout = Duration(seconds: 15);
 
   final String _deviceId;
   final String _deviceName;
@@ -252,6 +252,11 @@ class DiscoveryService {
     } catch (e) {
       Logger.e('UDP 服务启动失败', e);
     }
+  }
+
+  /// 主动发送一次心跳广播（供外部在重要操作前后刷新 lastSeen）
+  void sendHeartbeat() {
+    _sendUdpProbe();
   }
 
   void _sendUdpProbe() {

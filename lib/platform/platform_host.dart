@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'capabilities.dart';
 import 'platform_android.dart';
 import 'platform_windows.dart';
+import '../services/share_intent_service.dart';
 
 /// 平台宿主 — 唯一判断平台身份的地方
 /// 其余全部代码通过 [instance] 查询能力接口
@@ -146,6 +147,9 @@ class _GenericCapabilities implements PlatformCapabilities {
 
   @override
   bool get supportsShareIntent => false;
+
+  @override
+  ShareIntentService? get shareIntentService => NoopShareIntentService();
 
   @override
   List<String> get enabledFeatures => [];

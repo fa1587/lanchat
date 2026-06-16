@@ -2,6 +2,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import '../services/discovery_platform_service.dart';
+import '../services/share_intent_service.dart';
 import 'capabilities.dart';
 
 /// Android 平台全部能力实现
@@ -100,8 +101,16 @@ class AndroidCapabilities implements PlatformCapabilities {
   @override
   DragDropReceiver? get dragDropReceiver => null;
 
+  MethodChannelShareIntentService? _cachedShareService;
+
   @override
   bool get supportsShareIntent => true;
+
+  @override
+  ShareIntentService? get shareIntentService {
+    _cachedShareService ??= MethodChannelShareIntentService();
+    return _cachedShareService;
+  }
 
   @override
   List<String> get enabledFeatures => ['分享意图'];

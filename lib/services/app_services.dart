@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'network_service.dart';
@@ -6,6 +7,7 @@ import 'http_server_service.dart';
 import 'file_transfer_service.dart';
 import '../models/device.dart';
 import '../models/file_transfer.dart';
+import '../models/share_intent_item.dart';
 import 'message_service.dart';
 import 'database_service.dart';
 import '../utils/logger.dart';
@@ -27,6 +29,12 @@ class AppServices {
   // 启动状态
   bool _started = false;
   bool get isStarted => _started;
+
+  // 分享意图
+  final StreamController<ShareIntentItem> _shareController =
+      StreamController<ShareIntentItem>.broadcast();
+  StreamSubscription? _shareSub;
+  Stream<ShareIntentItem> get shareStream => _shareController.stream;
 
   AppServices({
     required this.deviceId,
@@ -209,6 +217,9 @@ class AppServices {
       await _discoveryService!.start();
     }
 
+    // 分享意图（Android 专属：接收从其他 App 分享的文件）
+    _initShareIntent();
+
     _started = true;
     Logger.i('LanChat 服务启动完成 (IP: $localIp, 端口: $httpPort)');
   }
@@ -242,6 +253,8 @@ class AppServices {
     await _discoveryService?.stop();
     // 平台特定后置操作（Android 释放 MulticastLock 等）
     await PlatformHost.instance.capabilities.stopDiscoveryBootstrap();
+    _shareSub?.cancel();
+    _shareController.close();
     await httpServerService.stop();
     await messageService.dispose();
     await fileTransferService.dispose();
@@ -270,6 +283,39 @@ class AppServices {
       httpPort: httpPort,
     );
     await _discoveryService!.start();
+  }
+
+  /// 初始化分享意图监听（仅热启动 — 冷启动由 UI 层调用 checkInitialShare）
+  void _initShareIntent() {
+    final caps = PlatformHost.instance.capabilities;
+    if (!caps.supportsShareIntent) return;
+
+    final service = caps.shareIntentService;
+    if (service == null) return;
+
+    // 热启动：监听运行中收到的分享
+    _shareSub = service.sharedData.listen((item) {
+      Logger.i('收到热启动分享: ${item.fileCount} 个文件');
+      _shareController.add(item);
+    });
+
+    Logger.i('分享意图监听已启动（热启动模式）');
+  }
+
+  /// 检查冷启动分享数据（应在 UI 层订阅 shareStream 之后调用）
+  Future<void> checkInitialShare() async {
+    final service = PlatformHost.instance.capabilities.shareIntentService;
+    if (service == null) return;
+    final items = await service.getInitialSharedData();
+    for (final item in items) {
+      Logger.i('收到冷启动分享: ${item.fileCount} 个文件');
+      _shareController.add(item);
+    }
+  }
+
+  /// 发送一次额外心跳（在文件传输等重要操作前调用，刷新接收端 lastSeen）
+  void pingDiscovery() {
+    _discoveryService?.sendHeartbeat();
   }
 
   /// 更新下载目录

@@ -195,6 +195,8 @@ class FileTransferService {
             onSendProgress?.call(
               target.id, transfer.id, progress, bytesTransferred, speedBps);
           }
+          // 显式出让事件循环，确保心跳定时器等事件不被饿死
+          await Future.delayed(Duration.zero);
         }
       } finally {
         await rawFile.close();

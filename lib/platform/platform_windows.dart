@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../utils/logger.dart';
+import '../services/share_intent_service.dart';
 import 'capabilities.dart';
 
 /// Windows 拖拽文件接收器 — 通过 MethodChannel 接收 C++ 端 WM_DROPFILES 事件
@@ -149,6 +150,9 @@ class WindowsCapabilities implements PlatformCapabilities {
 
   @override
   bool get supportsShareIntent => false;
+
+  @override
+  ShareIntentService? get shareIntentService => NoopShareIntentService();
 
   @override
   List<String> get enabledFeatures => ['拖拽上传'];
