@@ -25,6 +25,24 @@ class DiscoveryForegroundService : Service() {
 
         const val ACTION_START = "com.lanchat.action.START"
         const val ACTION_STOP = "com.lanchat.action.STOP"
+
+        fun start(context: Context) {
+            val intent = Intent(context, DiscoveryForegroundService::class.java).apply {
+                action = ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stop(context: Context) {
+            val intent = Intent(context, DiscoveryForegroundService::class.java).apply {
+                action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
     }
 
     override fun onCreate() {
@@ -102,26 +120,4 @@ class DiscoveryForegroundService : Service() {
             .build()
     }
 
-    /**
-     * 启动前台服务
-     */
-    companion object {
-        fun start(context: Context) {
-            val intent = Intent(context, DiscoveryForegroundService::class.java).apply {
-                action = ACTION_START
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        }
-
-        fun stop(context: Context) {
-            val intent = Intent(context, DiscoveryForegroundService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
-        }
-    }
 }

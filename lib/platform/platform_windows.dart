@@ -69,16 +69,18 @@ class WindowsCapabilities implements PlatformCapabilities {
   Future<void> addFirewallRule(int port) async {
     try {
       final ruleName = 'LanChat HTTP Server (port $port)';
-      // 先检查规则是否已存在
+      // 先检查规则是否已存在（加超时，避免 netsh 卡死）
       final check = await Process.run('netsh', [
         'advfirewall', 'firewall', 'show', 'rule',
         'name=$ruleName',
-      ]);
+      ]).timeout(const Duration(seconds: 10));
+
       if (check.stdout.toString().contains(ruleName)) {
         Logger.d('防火墙规则已存在: $ruleName');
         return;
       }
-      // 添加入站规则（只按端口放行，不绑定程序路径，避免空格/权限问题）
+
+      // 添加入站规则（只按端口放行，不绑定程序路径）
       final result = await Process.run('netsh', [
         'advfirewall', 'firewall', 'add', 'rule',
         'name=$ruleName',
@@ -87,12 +89,16 @@ class WindowsCapabilities implements PlatformCapabilities {
         'protocol=TCP',
         'localport=$port',
         'enable=yes',
-      ]);
+      ]).timeout(const Duration(seconds: 10));
+
       if (result.exitCode == 0) {
         Logger.i('防火墙规则已添加: $ruleName');
       } else {
-        Logger.w('防火墙规则添加失败: ${result.stderr}');
+        // 非管理员运行时 netsh 会报"拒绝访问"，这是正常的，记 warning 不抛异常
+        Logger.w('防火墙规则添加失败（可忽略，手动放行端口 $port 即可）: ${result.stderr}');
       }
+    } on TimeoutException {
+      Logger.w('防火墙规则操作超时（10秒），跳过');
     } catch (e) {
       Logger.w('防火墙规则操作异常: $e');
     }
@@ -113,19 +119,15 @@ class WindowsCapabilities implements PlatformCapabilities {
   // ── 权限 ────────────────────────────────────────
 
   @override
-  List<Permission> get networkPermissions => [Permission.storage];
+  List<Permission> get networkPermissions => [];
 
   @override
   bool get needsManageExternalStorage => false;
 
   @override
   Future<bool> requestStoragePermission() async {
-    final status = await Permission.storage.request();
-    final granted = status.isGranted;
-    if (!granted) {
-      Logger.w('存储权限被拒绝');
-    }
-    return granted;
+    // Windows 不需要运行时存储权限，直接返回 true
+    return true;
   }
 
   @override

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
 import '../utils/logger.dart';
 
@@ -16,9 +17,12 @@ class DiscoveryPlatformService {
     if (_started) return;
 
     try {
-      await _channel.invokeMethod<bool>('startDiscoveryService');
+      await _channel.invokeMethod<bool>('startDiscoveryService')
+          .timeout(const Duration(seconds: 3));
       _started = true;
       Logger.i('Android 前台发现服务已启动（MulticastLock 已获取）');
+    } on MissingPluginException {
+      Logger.w('Android 端未注册 discovery channel，跳过前台服务启动');
     } on PlatformException catch (e) {
       Logger.e('启动前台发现服务失败: ${e.message}', e);
     } catch (e) {
@@ -31,9 +35,12 @@ class DiscoveryPlatformService {
     if (!_started) return;
 
     try {
-      await _channel.invokeMethod<bool>('stopDiscoveryService');
+      await _channel.invokeMethod<bool>('stopDiscoveryService')
+          .timeout(const Duration(seconds: 3));
       _started = false;
       Logger.i('Android 前台发现服务已停止');
+    } on MissingPluginException {
+      Logger.w('Android 端未注册 discovery channel，跳过前台服务停止');
     } on PlatformException catch (e) {
       Logger.e('停止前台发现服务失败: ${e.message}', e);
     } catch (e) {

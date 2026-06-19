@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:network_info_plus/network_info_plus.dart';
 import '../utils/logger.dart';
@@ -9,34 +10,35 @@ class NetworkService {
   /// 获取本机局域网 IP 地址
   Future<String?> getLocalIp() async {
     try {
-      final wifiIp = await _networkInfo.getWifiIP();
-      if (wifiIp != null && wifiIp.isNotEmpty) {
-        Logger.i('本机 WiFi IP: $wifiIp');
-        return wifiIp;
-      }
-    } catch (e) {
-      Logger.e('获取 WiFi IP 失败', e);
-    }
+      // 整体超时 10 秒，避免网络异常时永远挂起
+      return await Future(() async {
+        final wifiIp = await _networkInfo.getWifiIP();
+        if (wifiIp != null && wifiIp.isNotEmpty) {
+          Logger.i('本机 WiFi IP: $wifiIp');
+          return wifiIp;
+        }
 
-    // 兜底：遍历网络接口
-    try {
-      final interfaces = await NetworkInterface.list();
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          // 找 IPv4 的私有地址
-          if (addr.type == InternetAddressType.IPv4 &&
-              _isPrivateIp(addr.address)) {
-            Logger.i('本机局域网 IP (from interface): ${addr.address}');
-            return addr.address;
+        // 兜底：遍历网络接口
+        final interfaces = await NetworkInterface.list();
+        for (final interface in interfaces) {
+          for (final addr in interface.addresses) {
+            // 找 IPv4 的私有地址
+            if (addr.type == InternetAddressType.IPv4 &&
+                _isPrivateIp(addr.address)) {
+              Logger.i('本机局域网 IP (from interface): ${addr.address}');
+              return addr.address;
+            }
           }
         }
-      }
+        return null;
+      }).timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      Logger.w('getLocalIp() 超时（10秒），返回 null');
+      return null;
     } catch (e) {
-      Logger.e('遍历网络接口失败', e);
+      Logger.e('获取本机 IP 失败', e);
+      return null;
     }
-
-    Logger.e('无法获取本机局域网 IP');
-    return null;
   }
 
   /// 判断是否为局域网私有 IP

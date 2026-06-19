@@ -54,10 +54,10 @@ class AndroidCapabilities implements PlatformCapabilities {
   List<Permission> get networkPermissions => [
         Permission.locationWhenInUse,
         Permission.nearbyWifiDevices,
-        Permission.storage,
-        Permission.manageExternalStorage,
         Permission.notification,
       ];
+  // 注意: storage 和 manageExternalStorage 不在 networkPermissions 里
+  // manageExternalStorage 需跳系统设置页，不能放启动流程，在设置页手动授权
 
   @override
   bool get needsManageExternalStorage => true;

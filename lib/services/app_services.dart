@@ -207,14 +207,24 @@ class AppServices {
     // 设备发现（仅在非 Web 环境启动）
     if (!kIsWeb) {
       // 平台特定前置操作（Android MulticastLock 等）
-      await PlatformHost.instance.capabilities.startDiscoveryBootstrap();
-      _discoveryService = DiscoveryService(
-        deviceId: deviceId,
-        deviceName: deviceName,
-        platform: platform,
-        httpPort: httpPort > 0 ? httpPort : 30000,
-      );
-      await _discoveryService!.start();
+      try {
+        await PlatformHost.instance.capabilities.startDiscoveryBootstrap();
+      } catch (e) {
+        Logger.w('发现服务前置启动失败（非阻塞）: $e');
+      }
+
+      try {
+        _discoveryService = DiscoveryService(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          platform: platform,
+          httpPort: httpPort > 0 ? httpPort : 30000,
+        );
+        await _discoveryService!.start();
+      } catch (e) {
+        Logger.w('发现服务启动失败（非阻塞）: $e');
+        _discoveryService = null;
+      }
     }
 
     // 分享意图（Android 专属：接收从其他 App 分享的文件）

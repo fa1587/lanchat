@@ -115,8 +115,18 @@ class SettingsNotifier extends StateNotifier<Settings> {
   }
 
   /// 生成有区分度的默认设备名
+  /// 注意：此方法可能在 PlatformHost 初始化之前被调用（全新安装首次加载设置时），
+  /// 因此必须有 fallback 不能依赖 PlatformHost.singleton
   static String defaultDeviceName() {
-    return PlatformHost.instance.capabilities.generateDefaultDeviceName();
+    try {
+      return PlatformHost.instance.capabilities.generateDefaultDeviceName();
+    } catch (_) {
+      // PlatformHost 未初始化时的 fallback（全新安装首次加载）
+      const hexChars = '0123456789abcdef';
+      final rnd = DateTime.now().millisecondsSinceEpoch;
+      final hex = (rnd & 0xFFFF).toRadixString(16).padLeft(4, '0');
+      return 'Device-$hex';
+    }
   }
 }
 
