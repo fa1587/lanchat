@@ -207,24 +207,14 @@ class AppServices {
     // 设备发现（仅在非 Web 环境启动）
     if (!kIsWeb) {
       // 平台特定前置操作（Android MulticastLock 等）
-      try {
-        await PlatformHost.instance.capabilities.startDiscoveryBootstrap();
-      } catch (e) {
-        Logger.w('发现服务前置启动失败（非阻塞）: $e');
-      }
-
-      try {
-        _discoveryService = DiscoveryService(
-          deviceId: deviceId,
-          deviceName: deviceName,
-          platform: platform,
-          httpPort: httpPort > 0 ? httpPort : 30000,
-        );
-        await _discoveryService!.start();
-      } catch (e) {
-        Logger.w('发现服务启动失败（非阻塞）: $e');
-        _discoveryService = null;
-      }
+      await PlatformHost.instance.capabilities.startDiscoveryBootstrap();
+      _discoveryService = DiscoveryService(
+        deviceId: deviceId,
+        deviceName: deviceName,
+        platform: platform,
+        httpPort: httpPort > 0 ? httpPort : 30000,
+      );
+      await _discoveryService!.start();
     }
 
     // 分享意图（Android 专属：接收从其他 App 分享的文件）
@@ -312,14 +302,15 @@ class AppServices {
     Logger.i('分享意图监听已启动（热启动模式）');
   }
 
-  /// 检查冷启动分享数据（应在 UI 层订阅 shareStream 之后调用）
   Future<void> checkInitialShare() async {
     final service = PlatformHost.instance.capabilities.shareIntentService;
     if (service == null) return;
     final items = await service.getInitialSharedData();
     for (final item in items) {
-      Logger.i('收到冷启动分享: ${item.fileCount} 个文件');
       _shareController.add(item);
+    }
+    if (items.isNotEmpty) {
+      await service.clear();
     }
   }
 

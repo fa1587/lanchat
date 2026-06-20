@@ -46,8 +46,12 @@ class MethodChannelShareIntentService implements ShareIntentService {
         if (data is Map) {
           final item = _parseSharedData(data);
           if (item.hasFiles || item.hasText) {
-            Logger.i('收到分享数据: ${item.fileCount} 个文件, app=${item.sourceApp}');
             _controller.add(item);
+            try {
+              await _channel.invokeMethod('clearSharedData');
+            } catch (e) {
+              // ignore
+            }
           }
         }
         break;

@@ -80,29 +80,47 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
+     * 从 Intent 提取所有文件 URI（ClipData + EXTRA_STREAM）
+     */
+    private fun extractFileUris(intent: Intent): List<Uri> {
+        val uris = mutableListOf<Uri>()
+        // 新版 Android 分享走 ClipData
+        val clipData = intent.clipData
+        if (clipData != null) {
+            for (i in 0 until clipData.itemCount) {
+                clipData.getItemAt(i).uri?.let { uris.add(it) }
+            }
+        }
+        // 旧版走 EXTRA_STREAM
+        if (uris.isEmpty()) {
+            intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
+        }
+        if (uris.isEmpty()) {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+        }
+        return uris
+    }
+
+    /**
      * 处理发送单个文件
      */
     private fun handleSendIntent(intent: Intent) {
-        // 提取来源 App
         pendingSourceApp = intent.`package` ?: "unknown"
 
-        // 检查是否有文件
-        val fileUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-        if (fileUri != null) {
-            val path = copyFileToCache(fileUri)
+        for (uri in extractFileUris(intent)) {
+            val path = copyFileToCache(uri)
             if (path != null) {
                 pendingSharedFiles.add(path)
                 Log.d(TAG, "收到分享文件: $path")
             }
         }
 
-        // 检查是否有文本
         val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
         if (sharedText != null) {
             pendingSharedText = sharedText
         }
 
-        // 通知 Flutter 端
         notifyFlutter()
     }
 
@@ -112,16 +130,13 @@ class MainActivity : FlutterActivity() {
     private fun handleSendMultipleIntent(intent: Intent) {
         pendingSourceApp = intent.`package` ?: "unknown"
 
-        val fileUris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
-        if (fileUris != null) {
-            for (uri in fileUris) {
-                val path = copyFileToCache(uri)
-                if (path != null) {
-                    pendingSharedFiles.add(path)
-                }
+        for (uri in extractFileUris(intent)) {
+            val path = copyFileToCache(uri)
+            if (path != null) {
+                pendingSharedFiles.add(path)
             }
-            Log.d(TAG, "收到多个分享文件: ${pendingSharedFiles.size}")
         }
+        Log.d(TAG, "收到多个分享文件: ${pendingSharedFiles.size}")
 
         notifyFlutter()
     }
@@ -130,11 +145,18 @@ class MainActivity : FlutterActivity() {
      * 处理查看文件
      */
     private fun handleViewIntent(intent: Intent) {
-        val uri = intent.data ?: return
-        val path = copyFileToCache(uri)
-        if (path != null) {
-            pendingSharedFiles.add(path)
-            pendingSourceApp = intent.`package` ?: "unknown"
+        pendingSourceApp = intent.`package` ?: "unknown"
+        val uris = extractFileUris(intent).toMutableList()
+        if (uris.isEmpty() && intent.data != null) {
+            uris.add(intent.data!!)
+        }
+        for (uri in uris) {
+            val path = copyFileToCache(uri)
+            if (path != null) {
+                pendingSharedFiles.add(path)
+            }
+        }
+        if (pendingSharedFiles.isNotEmpty()) {
             notifyFlutter()
         }
     }

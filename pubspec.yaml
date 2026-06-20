@@ -1,7 +1,7 @@
 name: lanchat
 description: 局域网文件传输 + 即时消息应用
 publish_to: 'none'
-version: 1.0.15+15
+version: 1.1.0+18
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
