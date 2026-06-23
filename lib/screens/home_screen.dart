@@ -2,15 +2,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
-import '../models/file_transfer.dart';
 import '../models/share_intent_item.dart';
 import '../providers/device_provider.dart';
 import '../providers/file_transfer_provider.dart';
+import '../providers/message_provider.dart';
+import '../services/message_service.dart';
 import '../utils/logger.dart';
 import '../widgets/device_tile.dart';
 import '../widgets/device_picker_dialog.dart';
 import '../widgets/empty_state.dart';
-import '../widgets/file_transfer_tile.dart';
+import '../widgets/transfer_panel.dart';
 import 'chat_screen.dart';
 
 /// 主页 —— 显示附近设备列表和活跃传输
@@ -22,9 +23,6 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObserver {
-  /// 本地维护的活跃传输列表，由 activeStream 驱动 setState 更新
-  List<FileTransfer> _activeTransfers = [];
-  StreamSubscription<List<FileTransfer>>? _transferSub;
   StreamSubscription<ShareIntentItem>? _shareSub;
   bool _handlingShare = false;
 
@@ -34,15 +32,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     WidgetsBinding.instance.addObserver(this);
     // 延迟订阅，等服务初始化完成
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _setupTransferListener();
       _setupShareListener();
+      _setupUnreadListener();
     });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _transferSub?.cancel();
     _shareSub?.cancel();
     super.dispose();
   }
@@ -57,29 +54,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     }
   }
 
-  /// 订阅 FileTransferService 的进度 stream（setState 直驱，不依赖 StreamProvider）
-  void _setupTransferListener() {
-    final ftService = ref.read(fileTransferServiceProvider);
-    if (ftService == null) {
-      // 服务还没初始化，100ms 后重试
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted) _setupTransferListener();
-      });
-      return;
-    }
-    _transferSub = ftService.activeStream.listen((transfers) {
-      if (!mounted) return;
-      setState(() {
-        _activeTransfers = transfers;
-      });
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final services = ref.watch(appServicesProvider);
     final discoveredDevices = ref.watch(devicesProvider);
     final manualDevices = ref.watch(manualDevicesProvider);
+    final activeTransfers = ref.watch(activeTransfersProvider).valueOrNull ?? [];
+    final activeCount = activeTransfers.length;
+    final unreadCounts = ref.watch(unreadCountsProvider);
 
     final isLoading = services == null;
     // 合并自动发现 + 手动添加的设备
@@ -105,11 +87,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
       ),
       body: Column(
         children: [
-          // 活跃传输横幅
-          if (_activeTransfers.isNotEmpty) ...[
-            _TransferBanner(transfers: _activeTransfers),
-          ],
-
           // 设备列表
           Expanded(
             child: isLoading
@@ -137,7 +114,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                         },
                         child: ListView.builder(
                           padding: const EdgeInsets.only(
-                              top: 8, bottom: 80),
+                              top: 8, bottom: 48),
                           itemCount: allDevices.length,
                           itemBuilder: (context, index) {
                             final device = allDevices[index];
@@ -146,6 +123,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                             return DeviceTile(
                               device: device,
                               showManualBadge: isManual,
+                              unreadCount: unreadCounts[device.id] ?? 0,
                               onTap: () =>
                                   _openChat(context, device),
                               onLongPress: isManual
@@ -155,6 +133,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                           },
                         ),
                       ),
+          ),
+          // 传输状态栏（始终显示，有活跃传输时高亮）
+          GestureDetector(
+            onTap: () => showTransferPanel(context),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: activeCount > 0
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(12)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    activeCount > 0
+                        ? Icons.file_download
+                        : Icons.file_download_outlined,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    activeCount > 0
+                        ? '$activeCount 个传输中'
+                        : '传输',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelMedium
+                        ?.copyWith(
+                          color: activeCount > 0
+                              ? Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer
+                              : Theme.of(context).colorScheme.onSurface,
+                        ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.keyboard_arrow_up,
+                      size: 16,
+                      color: activeCount > 0
+                          ? Theme.of(context)
+                              .colorScheme.onPrimaryContainer
+                          : Theme.of(context).colorScheme.onSurface),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -340,6 +368,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     }
   }
 
+  /// 监听新消息，刷新未读计数
+  void _setupUnreadListener() {
+    final msgService = ref.read(messageServiceProvider);
+    if (msgService == null) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) _setupUnreadListener();
+      });
+      return;
+    }
+
+    // 启动时加载已有未读计数
+    _refreshUnreadCounts(msgService);
+
+    // 收到新消息时刷新
+    msgService.messages.listen((_) {
+      _refreshUnreadCounts(msgService);
+    });
+  }
+
+  Future<void> _refreshUnreadCounts(MessageService msgService) async {
+    try {
+      final counts = await msgService.getUnreadCounts();
+      if (mounted) {
+        ref.read(unreadCountsProvider.notifier).state = counts;
+      }
+    } catch (e) {
+      Logger.e('刷新未读计数失败', e);
+    }
+  }
+
   void _openChat(BuildContext context, Device device) {
     Navigator.push(
       context,
@@ -350,36 +408,3 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   }
 }
 
-/// 活跃传输横幅
-class _TransferBanner extends StatelessWidget {
-  final List<FileTransfer> transfers;
-  const _TransferBanner({required this.transfers});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('传输中 (${transfers.length})',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onPrimaryContainer)),
-          const SizedBox(height: 8),
-          SizedBox(
-              height: 80,
-              child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: transfers.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) => SizedBox(
-                      width: 280,
-                      child: FileTransferTile(
-                          transfer: transfers[i], compact: true)))),
-        ],
-      ),
-    );
-  }
-}

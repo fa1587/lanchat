@@ -12,6 +12,7 @@ import '../providers/file_transfer_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/device_provider.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/transfer_panel.dart';
 import '../platform/platform_host.dart';
 
 /// 聊天页面
@@ -27,19 +28,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
   final _updater = ChatMessageUpdater();
-  StreamSubscription<List<FileTransfer>>? _transferSub;
+  StreamSubscription<List<FileTransfer>>? _historySub;
   StreamSubscription<List<String>>? _dragDropSub;
   final Set<String> _notifiedTransferIds = {};
-
-  /// 本地维护的活跃传输列表，由 stream 驱动 setState 更新
-  List<FileTransfer> _activeTransfers = [];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updater.start(ref, widget.device.id);
-      _setupTransferListener();
+      _setupHistoryListener();
       _setupDragDropListener();
       _autoSendPendingShare();
       _clearUnread();
@@ -87,26 +85,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  /// 订阅 FileTransferService 的进度 stream
-  void _setupTransferListener() {
+  /// 订阅历史 stream — 接收完成时弹 SnackBar
+  void _setupHistoryListener() {
     final ftService = ref.read(fileTransferServiceProvider);
     if (ftService == null) {
-      // 服务还没初始化，100ms 后重试
       Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted) _setupTransferListener();
+        if (mounted) _setupHistoryListener();
       });
       return;
     }
-    _transferSub = ftService.activeStream.listen((transfers) {
+    _historySub = ftService.historyStream.listen((transfers) {
       if (!mounted) return;
-      // 更新本地传输列表 + setState 触发 UI 刷新
-      setState(() {
-        _activeTransfers = transfers;
-      });
-      // 文件接收完成弹 Snackbar
       for (final t in transfers) {
         if (t.direction == TransferDirection.receive &&
             t.status == TransferStatus.completed &&
+            t.remoteDeviceId == widget.device.id &&
             !_notifiedTransferIds.contains(t.id)) {
           _notifiedTransferIds.add(t.id);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -135,7 +128,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
-    _transferSub?.cancel();
+    _historySub?.cancel();
     _dragDropSub?.cancel();
     _updater.stop();
     _textController.dispose();
@@ -161,24 +154,62 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  /// 聊天主体内容（消息列表 + 输入栏 + 拖拽遮罩）
+  /// 聊天主体内容（消息列表 + 传输横幅 + 输入栏）
   Widget _buildChatBody() {
     final messages = ref.watch(chatMessagesProvider(widget.device.id));
     final myDeviceId = ref.watch(settingsProvider).deviceId;
-    final deviceTransfers = _activeTransfers
+    final activeTransfers = ref.watch(activeTransfersProvider).valueOrNull ?? [];
+    final deviceTransfers = activeTransfers
         .where((t) => t.remoteDeviceId == widget.device.id)
         .toList();
-    final items = _mergeMessagesAndTransfers(messages, deviceTransfers);
 
     return Column(children: [
-        Expanded(child: _buildMessageList(items, myDeviceId)),
+        // 活跃传输横幅（仅当前设备有传输时显示）
+        if (deviceTransfers.isNotEmpty)
+          _buildTransferBanner(deviceTransfers),
+        Expanded(child: _buildMessageList(messages, deviceTransfers, myDeviceId)),
         const Divider(height: 1),
         _buildInputBar(context),
       ]);
   }
 
-  Widget _buildMessageList(List<dynamic> items, String myDeviceId) {
-    if (items.isEmpty) {
+  /// 轻量传输横幅（替代旧的 _mergeMessagesAndTransfers 混排方式）
+  Widget _buildTransferBanner(List<FileTransfer> transfers) {
+    return GestureDetector(
+      onTap: () => showTransferPanel(context),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        color: Theme.of(context).colorScheme.primaryContainer.withAlpha(180),
+        child: Row(
+          children: [
+            const Icon(Icons.file_upload, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                transfers.length == 1
+                    ? '${transfers.first.direction == TransferDirection.send ? "正在发送" : "正在接收"} ${transfers.first.fileName} (${(transfers.first.progress * 100).toStringAsFixed(0)}%)'
+                    : '${transfers.length} 个文件传输中',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color:
+                          Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.keyboard_arrow_up,
+                size: 16,
+                color: Theme.of(context).colorScheme.onPrimaryContainer),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageList(List<Message> messages, List<FileTransfer> deviceTransfers, String myDeviceId) {
+    if (messages.isEmpty) {
       return const Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey),
@@ -200,23 +231,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
 
-    // 建立 transferId → FileTransfer 索引，供气泡查找进度
+    // 建立 transferId → FileTransfer 索引，供文件消息气泡查询进度
     final transferMap = <String, FileTransfer>{};
-    for (final item in items) {
-      if (item is FileTransfer) {
-        transferMap[item.id] = item;
-      }
+    for (final t in deviceTransfers) {
+      transferMap[t.id] = t;
     }
-
-    // 只显示 Message，不把 FileTransfer 作为独立 item 显示
-    final messagesOnly = items.whereType<Message>().toList();
 
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: messagesOnly.length,
+      itemCount: messages.length,
       itemBuilder: (_, i) {
-        final msg = messagesOnly[i];
+        final msg = messages[i];
         final transfer = msg.transferId != null ? transferMap[msg.transferId] : null;
         return MessageBubble(
           message: msg,
@@ -345,14 +371,4 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  List<dynamic> _mergeMessagesAndTransfers(
-      List<Message> messages, List<FileTransfer> transfers) {
-    final items = <dynamic>[...messages, ...transfers];
-    items.sort((a, b) {
-      final aTime = a is Message ? a.timestamp : (a as FileTransfer).createdAt;
-      final bTime = b is Message ? b.timestamp : (b as FileTransfer).createdAt;
-      return aTime.compareTo(bTime);
-    });
-    return items;
-  }
 }

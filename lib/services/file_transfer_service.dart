@@ -26,6 +26,11 @@ class FileTransferService {
   final _transferController =
       StreamController<List<FileTransfer>>.broadcast();
 
+  // 已完成/失败/取消的传输历史
+  final _historyTransfers = <FileTransfer>[];
+  final _historyController =
+      StreamController<List<FileTransfer>>.broadcast();
+
   String? _downloadDir;
   String _userDownloadPath = ''; // 用户设置的下载目录
   final _client = http.Client();
@@ -55,7 +60,16 @@ class FileTransferService {
   Stream<List<FileTransfer>> get activeStream =>
       _transferController.stream;
 
-  List<FileTransfer> get activeTransfers => _transfers.values.toList();
+  Stream<List<FileTransfer>> get historyStream =>
+      _historyController.stream;
+
+  List<FileTransfer> get activeTransfers =>
+      _transfers.values.where((t) =>
+          t.status == TransferStatus.pending ||
+          t.status == TransferStatus.transferring).toList();
+
+  List<FileTransfer> get historyTransfers =>
+      List.unmodifiable(_historyTransfers);
 
   /// 更新用户设置的下载目录
   set userDownloadPath(String path) {
@@ -259,8 +273,11 @@ class FileTransferService {
   ) {
     final existing = _transfers[transferId];
     if (existing == null) {
+      // 检查是否已进入历史（handleReceiveFile 已完成），忽略残留进度消息
+      final inHistory = _historyTransfers.any((t) => t.id == transferId);
+      if (inHistory) return;
+
       // handleReceiveFile 还没创建记录，先创建占位
-      // 注意：不能 return！要继续执行，让下方的 copyWith 更新 UI
       _transfers[transferId] = FileTransfer(
         id: transferId,
         fileName: '接收中...',
@@ -274,17 +291,16 @@ class FileTransferService {
         createdAt: DateTime.now(),
       );
       _emitTransfers();
-      // 不 return —— 让 handleReceiveFile 后续用 copyWith 更新
-      // 这里只负责占位，不负责持久化
       return;
     }
     // 记录已存在：更新进度（handleReceiveFile 创建的，或上次占位）
+    // 注意：不设置 completed 状态——WebSocket 进度只是进度更新，
+    // 真正的完成状态由 handleReceiveFile 确认
     _transfers[transferId] = existing.copyWith(
-      status: progress >= 1.0 ? TransferStatus.completed : TransferStatus.transferring,
+      status: TransferStatus.transferring,
       progress: progress,
       bytesTransferred: bytesTransferred,
       speedBps: speedBps,
-      completedAt: progress >= 1.0 ? DateTime.now() : null,
     );
     _emitTransfers();
   }
@@ -305,8 +321,9 @@ class FileTransferService {
     final finalPath = '$dir/$safeFileName';
 
     // 创建或合并传输记录
-    // 关键：如果 updateReceiveProgress 已通过 WebSocket 推送创建了占位记录，
-    // 保留占位记录的进度，只补充文件信息，避免 progress 被重置为 0
+    // 如果 updateReceiveProgress 已通过 WebSocket 推送创建了占位记录，
+    // 用 HTTP header 中的真实文件信息覆盖占位的 '接收中...' 等字段，
+    // 同时保留已有进度（避免 progress 被重置为 0）
     FileTransfer transfer;
     final existing = _transfers[transferId];
     if (existing == null) {
@@ -321,14 +338,25 @@ class FileTransferService {
         status: TransferStatus.transferring,
         createdAt: DateTime.now(),
       );
-      _transfers[transferId] = transfer;
-      _emitTransfers();
     } else {
-      // 保留已有进度（来自 WebSocket 推送），不覆盖
-      transfer = existing;
+      // 合并：用真实文件信息覆盖占位，保留已有进度
+      transfer = FileTransfer(
+        id: existing.id,
+        fileName: safeFileName,
+        fileSize: fileSize,
+        mimeType: mimeType,
+        remoteDeviceId: remoteDeviceId,
+        remoteDeviceName: remoteDeviceName,
+        direction: TransferDirection.receive,
+        status: TransferStatus.transferring,
+        progress: existing.progress,
+        bytesTransferred: existing.bytesTransferred,
+        speedBps: existing.speedBps,
+        createdAt: existing.createdAt,
+      );
       _transfers[transferId] = transfer;
-      _emitTransfers();
     }
+    _emitTransfers();
 
     try {
       // 写入临时文件（.lanchat_tmp），传输完成后 rename 到最终路径
@@ -456,7 +484,25 @@ class FileTransferService {
   }
 
   void _emitTransfers() {
-    _transferController.add(_transfers.values.toList());
+    final all = _transfers.values.toList();
+    final active = all.where((t) =>
+        t.status == TransferStatus.pending ||
+        t.status == TransferStatus.transferring).toList();
+    final terminal = all.where((t) =>
+        t.status == TransferStatus.completed ||
+        t.status == TransferStatus.failed ||
+        t.status == TransferStatus.cancelled).toList();
+
+    _transferController.add(active);
+
+    // 终态传输从活跃列表移入历史列表
+    for (final t in terminal) {
+      _transfers.remove(t.id);
+      _historyTransfers.add(t);
+    }
+    if (terminal.isNotEmpty) {
+      _historyController.add(List.unmodifiable(_historyTransfers));
+    }
   }
 
   String _guessMimeType(String fileName) {
@@ -506,8 +552,21 @@ class FileTransferService {
     return safeName;
   }
 
+  /// 从历史列表中移除单条传输记录
+  void dismissTransfer(String id) {
+    _historyTransfers.removeWhere((t) => t.id == id);
+    _historyController.add(List.unmodifiable(_historyTransfers));
+  }
+
+  /// 清空传输历史
+  void clearHistory() {
+    _historyTransfers.clear();
+    _historyController.add([]);
+  }
+
   Future<void> dispose() async {
     _client.close();
     await _transferController.close();
+    await _historyController.close();
   }
 }

@@ -24,6 +24,14 @@ final transferringProvider = Provider<List<FileTransfer>>((ref) {
       .toList();
 });
 
+/// 传输历史列表（已完成/失败/取消）
+final transferHistoryProvider =
+    StreamProvider<List<FileTransfer>>((ref) {
+  final service = ref.watch(fileTransferServiceProvider);
+  if (service == null) return Stream.value([]);
+  return service.historyStream;
+});
+
 /// 当前生效的下载目录（读取运行时实际路径）
 final effectiveDownloadDirProvider = FutureProvider<String>((ref) async {
   final service = ref.watch(fileTransferServiceProvider);
