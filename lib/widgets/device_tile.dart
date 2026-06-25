@@ -97,7 +97,7 @@ class DeviceTile extends StatelessWidget {
               ),
           ],
         ),
-        onTap: device.isOnline ? onTap : null,
+        onTap: onTap,
         onLongPress: onLongPress,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),

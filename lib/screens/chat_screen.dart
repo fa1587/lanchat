@@ -269,6 +269,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildInputBar(BuildContext context) {
+    final online = widget.device.isOnline;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       color: Theme.of(context).colorScheme.surface,
@@ -277,12 +278,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           IconButton(
               icon: const Icon(Icons.attach_file),
               tooltip: '发送文件',
-              onPressed: _pickAndSendFile),
+              onPressed: online ? _pickAndSendFile : null),
           Expanded(
               child: TextField(
             controller: _textController,
+            enabled: online,
             decoration: InputDecoration(
-                hintText: '输入消息...',
+                hintText: online ? '输入消息...' : '对方已离线',
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none),
@@ -292,12 +294,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             textInputAction: TextInputAction.send,
-            onSubmitted: (_) => _sendTextMessage(),
+            onSubmitted: online ? (_) => _sendTextMessage() : null,
           )),
           IconButton(
               icon: const Icon(Icons.send_rounded),
-              color: Theme.of(context).colorScheme.primary,
-              onPressed: _sendTextMessage),
+              color: online
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.grey,
+              onPressed: online ? _sendTextMessage : null),
         ]),
       ),
     );
