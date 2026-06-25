@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/message.dart';
 import '../models/file_transfer.dart';
+import 'image_viewer.dart';
 
 /// 消息气泡组件
 class MessageBubble extends StatelessWidget {
@@ -127,30 +128,95 @@ class MessageBubble extends StatelessWidget {
         );
 
       case MessageType.image:
+        final hasThumbnail = message.thumbnailBase64 != null;
+        final imagePath = transfer?.localPath;
+        final heroTag = 'image_${message.id}';
+
+        if (hasThumbnail) {
+          // 有缩略图：显示图片预览，点击可打开全屏查看器
+          return GestureDetector(
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ImageViewerPage(
+                    imagePath: imagePath,
+                    fileName: message.fileName ?? '图片',
+                    heroTag: heroTag,
+                  ),
+                ),
+              );
+            },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Hero(
+                  tag: heroTag,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: 280,
+                        maxHeight: 250,
+                      ),
+                      child: Image.memory(
+                        _fromBase64(message.thumbnailBase64!),
+                        fit: BoxFit.contain,
+                        errorBuilder: (ctx, err, st) {
+                          return const Icon(Icons.broken_image, size: 48, color: Colors.grey);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  message.fileName ?? '图片',
+                  style: TextStyle(color: textColor, fontSize: 13),
+                ),
+                if (message.fileSize != null)
+                  Text(
+                    _formatSize(message.fileSize!),
+                    style: TextStyle(
+                        color: textColor.withAlpha(150), fontSize: 11),
+                  ),
+              ],
+            ),
+          );
+        }
+
+        // 无缩略图（旧版消息或传输中）：显示文件图标占位
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (message.thumbnailBase64 != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  _fromBase64(message.thumbnailBase64!),
-                  fit: BoxFit.cover,
-                  width: 200,
-                  height: 150,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.image_outlined, color: textColor, size: 32),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        message.fileName ?? '图片',
+                        style: TextStyle(
+                            color: textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (message.fileSize != null)
+                        Text(
+                          _formatSize(message.fileSize!),
+                          style: TextStyle(
+                              color: textColor.withAlpha(150),
+                              fontSize: 11),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-            const SizedBox(height: 4),
-            Text(
-              message.fileName ?? '图片',
-              style: TextStyle(color: textColor, fontSize: 13),
+              ],
             ),
-            if (message.fileSize != null)
-              Text(
-                _formatSize(message.fileSize!),
-                style: TextStyle(
-                    color: textColor.withAlpha(150), fontSize: 11),
-              ),
           ],
         );
 

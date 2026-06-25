@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:mime/mime.dart';
 import 'package:uuid/uuid.dart';
 import '../models/device.dart';
 import '../models/message.dart';
@@ -13,6 +14,7 @@ import '../providers/settings_provider.dart';
 import '../providers/device_provider.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/transfer_panel.dart';
+import '../utils/thumbnail.dart';
 import '../platform/platform_host.dart';
 
 /// 聊天页面
@@ -31,6 +33,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   StreamSubscription<List<FileTransfer>>? _historySub;
   StreamSubscription<List<String>>? _dragDropSub;
   final Set<String> _notifiedTransferIds = {};
+  int _lastMessageCount = 0;
 
   @override
   void initState() {
@@ -162,12 +165,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final deviceTransfers = activeTransfers
         .where((t) => t.remoteDeviceId == widget.device.id)
         .toList();
+    // 合并活跃和历史传输，确保完成的传输也能查到 localPath
+    final historyTransfers = ref.watch(transferHistoryProvider).valueOrNull ?? [];
+    final allDeviceTransfers = [...deviceTransfers, ...historyTransfers.where((t) => t.remoteDeviceId == widget.device.id)];
 
     return Column(children: [
         // 活跃传输横幅（仅当前设备有传输时显示）
         if (deviceTransfers.isNotEmpty)
           _buildTransferBanner(deviceTransfers),
-        Expanded(child: _buildMessageList(messages, deviceTransfers, myDeviceId)),
+        Expanded(child: _buildMessageList(messages, allDeviceTransfers, myDeviceId)),
         const Divider(height: 1),
         _buildInputBar(context),
       ]);
@@ -222,14 +228,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut);
+    // 仅在新消息到达且用户已在底部时自动滚底（避免重连/动画返回时误触发）
+    if (messages.length > _lastMessageCount) {
+      _lastMessageCount = messages.length;
+      final nearBottom = _scrollController.hasClients &&
+          _scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 100;
+      if (nearBottom || _lastMessageCount == 1) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+                _scrollController.position.maxScrollExtent,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut);
+          }
+        });
       }
-    });
+    }
 
     // 建立 transferId → FileTransfer 索引，供文件消息气泡查询进度
     final transferMap = <String, FileTransfer>{};
@@ -339,6 +354,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final transferId = const Uuid().v4();
     final fileName = file.path.split('/').last.split('\\').last;
     final fileSize = await file.length();
+    final mimeType = lookupMimeType(fileName) ?? 'application/octet-stream';
+
+    // 如果是图片，发送前生成缩略图
+    String? thumbnailBase64;
+    if (mimeType.startsWith('image/')) {
+      thumbnailBase64 = await generateThumbnailBase64(file.path);
+    }
 
     // 1. 立即创建文件消息并加入 provider（乐观更新，进度条才能显示）
     final msg = Message.file(
@@ -346,7 +368,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       transferId: transferId,
       fileName: fileName,
       fileSize: fileSize,
-      mimeType: 'application/octet-stream',
+      mimeType: mimeType,
+      thumbnailBase64: thumbnailBase64,
       senderId: ref.read(settingsProvider).deviceId,
       senderName: ref.read(settingsProvider).deviceName,
       receiverId: widget.device.id,

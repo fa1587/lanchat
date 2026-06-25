@@ -108,6 +108,7 @@ class FileTransferService {
       remoteDeviceName: target.name,
       direction: TransferDirection.send,
       status: TransferStatus.transferring, // 立即进入传输状态
+      localPath: file.path,
       createdAt: DateTime.now(),
     );
 

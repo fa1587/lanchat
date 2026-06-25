@@ -399,11 +399,14 @@ class MessageService {
   Future<void> _addToHistory(Message msg) async {
     final key = msg.senderId == _deviceId ? msg.receiverId : msg.senderId;
     _messageHistory.putIfAbsent(key, () => []);
-    // 去重：同 ID 消息不重复添加（接收端文件消息可能由 HTTP 上传和 WebSocket 两条路径创建）
-    if (_messageHistory[key]!.any((m) => m.id == msg.id)) {
-      return;
+    // 去重：同 ID 消息更新替换（接收端文件消息先由 HTTP 占位，再由 WebSocket 补全元数据）
+    final existingIdx = _messageHistory[key]!.indexWhere((m) => m.id == msg.id);
+    if (existingIdx >= 0) {
+      _messageHistory[key]![existingIdx] = msg;
+      Logger.d('消息更新: ${msg.id} ${msg.type.name}');
+    } else {
+      _messageHistory[key]!.add(msg);
     }
-    _messageHistory[key]!.add(msg);
 
     // 接收到的消息增加未读计数（自己发的消息不计）
     final isReceived = msg.senderId != _deviceId;
